@@ -1,0 +1,142 @@
+<gel:script xmlns:gel="jelly:com.niku.union.gel.GELTagLibrary" xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:core="jelly:core" xmlns:soap="jelly:com.niku.union.gel.SOAPTagLibrary" xmlns:sql="jelly:sql" xmlns:util="jelly:util" xmlns:xog="http://www.niku.com/xog" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+	<core:catch var="f_exception">
+		<core:set value="${file.separator}" var="FS"/>
+		<core:set var="customPropPath">
+		
+		<![CDATA[-Dcustom.properties=/fs0/clarity1/share/custom.properties]]>
+		
+		</core:set>
+		<core:set var="appInstance">
+		
+		<![CDATA[applicationServerInstance]]>
+		
+		</core:set>
+		<core:set var="bgInstance">
+		
+		<![CDATA[backgroundServer]]>
+		
+		</core:set>
+		<core:invokeStatic className="java.lang.System" method="getProperty" var="filelocation">
+			<core:arg type="java.lang.String" value="user.dir"/>
+		</core:invokeStatic>	  
+		<core:invoke method="trim" on="${filelocation}" var="filelocation" />
+		<core:new className="java.io.File" var="fileobj">
+			<core:arg type="java.lang.String" value="${filelocation}" />
+		</core:new>	
+		<core:invoke method="getParent" on="${fileobj}" var="parentpath"/>
+
+		<!--Creating a File object -->
+		<core:invoke method="trim" on="${parentpath}" var="parentpath" />
+		<core:new className="java.io.File" var="parentObj">
+			<core:arg type="java.lang.String" value="${parentpath}" />
+		</core:new>
+		<!--Checking if it is a directory or Not?? -->
+		<core:invoke method="isDirectory" on="${parentObj}" var="check" />
+		<core:choose>
+			<core:when test="${check == true }">
+				<!--Get the FileCount in the directory -->
+				<core:invoke method="list" on="${parentObj}" var="files" />
+				<core:set value="${files.size()}" var="filecount" />
+				<!--If the file count is not empty then get the file names by looping through each file -->
+				<core:if test="${filecount != 0}">
+					<!--<gel:log># of Files exist in the directory ${parentpath}: ${filecount}</gel:log>-->
+					<core:forEach items="${parentObj.listFiles()}" var="file">
+						<core:set value="${file.getName()}" var="file_Name" />
+						<!--<gel:log>Found a File with Name :${file_Name}</gel:log>-->
+						<core:if test="${file_Name == 'config' }">
+
+
+
+							<core:set value="${parentpath}${FS}${file_Name}" var="cust_Name" />
+							<core:invoke method="trim" on="${cust_Name}" var="cust_Name" />
+							<core:new className="java.io.File" var="ffff">
+								<core:arg type="java.lang.String" value="${cust_Name}" />
+							</core:new>
+							<!--Checking if it is a directory or Not?? -->
+							<core:invoke method="isDirectory" on="${ffff}" var="checkff" />
+
+							<core:choose>
+								<core:when test="${checkff == true }">
+									<!--Get the FileCount in the directory -->
+									<core:invoke method="list" on="${ffff}" var="filessss" />
+									<core:set value="${filessss.size()}" var="filezcount" />
+									<!--If the file count is not empty then get the file names by looping through each file -->
+									<core:if test="${filezcount != 0}">
+										<gel:log># of Files exist in the directory of config: ${filezcount}</gel:log>
+										<core:forEach items="${ffff.listFiles()}" var="filez">
+											<core:set value="${filez.getName()}" var="filez_Name" />
+											<core:set value="${filez.length()}" var="filez_length" />
+											<!-- <gel:log>File Name : ${filez_Name} ::: File Size(bytes) : ${filez_length} </gel:log> -->
+											
+											<core:if test="${filez_Name.equals('properties.xml')}">
+											
+											
+											<core:set value="${cust_Name}${FS}${filez_Name}" var="cust_Name" />
+											<core:invoke method="trim" on="${cust_Name}" var="cust_Name" />
+											<core:invoke method="trim" on="${cust_Name}" var="src_filelocation" />
+												  <core:new className="java.io.File" var="f">
+													 <core:arg type="java.lang.String" value="${src_filelocation}" />
+												  </core:new>
+
+												<core:new className="java.io.FileReader" var="thisfile">
+													<core:arg type="java.io.File" value="${f}"/>
+												</core:new>
+												<core:new className="java.io.BufferedReader" var="propfiledata">
+													<core:arg type="java.io.FileReader" value="${thisfile}"/>
+												</core:new>
+
+												<core:set var="linefeed" value="${propfiledata.readLine()}"/>
+
+												<core:while test="${linefeed != null}">
+
+													<core:set value="${linefeed.toLowerCase().contains(customPropPath.toLowerCase())}" var="isPresent"/>
+													<core:set value="${linefeed.toLowerCase().contains(appInstance.toLowerCase())}" var="isPresentInApp"/>
+													<core:set value="${linefeed.toLowerCase().contains(bgInstance.toLowerCase())}" var="isPresentInBg"/>
+													
+													<core:if test="${isPresent and isPresentInApp}">
+													
+													<gel:log category="APPINSTANCE">${linefeed}</gel:log>
+													
+													</core:if>
+													<core:if test="${isPresent and isPresentInBg}">
+													
+													<gel:log category="BGINSTANCE">${linefeed}</gel:log>
+													
+													</core:if>
+
+
+													<core:set var="linefeed" value="${propfiledata.readLine()}"/>
+												</core:while>
+													
+												
+												<core:mute>${propfiledata.close()}</core:mute>
+											
+											
+											</core:if>
+											
+										</core:forEach>
+									</core:if>
+								</core:when>
+								<core:otherwise>
+									<gel:log level="WARN">Invalid Directory : ${ffff}</gel:log>
+								</core:otherwise>
+							</core:choose>
+
+						</core:if>
+
+
+					</core:forEach>
+				</core:if>
+				<core:if test="${filecount == 0}">
+					<gel:log level="WARN">No Files Exist in the Specified File Location</gel:log>
+				</core:if>
+			</core:when>
+			<core:otherwise>
+				<gel:log level="WARN">Invalid Directory : ${f}</gel:log>
+			</core:otherwise>
+		</core:choose>
+	</core:catch>
+	<core:if test="${f_exception != null}">
+		<gel:log level="WARN">Error :${f_exception}</gel:log>
+	</core:if>
+</gel:script>

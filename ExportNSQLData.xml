@@ -1,0 +1,730 @@
+<gel:script
+     xmlns:core="jelly:core"
+     xmlns:xog="http://www.niku.com/xog"
+     xmlns:x="jelly:org.apache.commons.jelly.tags.xml.XMLTagLibrary"
+     xmlns:gel="jelly:com.niku.union.gel.GELTagLibrary"
+     xmlns:soap="jelly:com.niku.union.gel.SOAPTagLibrary"
+     xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+     xmlns:nikuq="http://www.niku.com/xog/Query"
+     xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	 xmlns:util="jelly:util">
+
+
+
+	<gel:out>Processing....</gel:out>
+	<core:set var="username" value="${User}"/>
+	<core:set var="passcode" value="${password}"/>
+	<core:set var="SrcurlEndpoint" value="${SrcClarity}/niku/xog"/>
+	<core:set var="DesturlEndpoint" value="${DestClarity}/niku/xog"/>
+	<core:set var="FolderPath" value="${FolderPath}" />
+
+	<core:set var="urlEndpoint" value="${SrcClarity}/niku/xog"/>
+	<core:set var="src_filelocation" value="C:\saksr01\CA\Projects\GCP\DataValidation\Input" />
+	<core:set var="dest_fileLocation" value="C:\saksr01\CA\Projects\GCP\DataValidation\Output"/>
+	<core:set var="dest_xmlLocation" value="C:\saksr01\CA\Projects\GCP\DataValidation\Output\Outputxmls"/>
+	<core:set var="dest_colHeadersLoc" value="C:\saksr01\CA\Projects\GCP\DataValidation\Output\ColumnHeaders"/>
+	<core:set var="v_p_file_path" value="${dest_fileLocation}\NSQLCount.xls"/>
+	<core:set var="v_p_file_fail_path" value="${dest_fileLocation}\NSQLFailures.xls"/>
+	<core:set var="v_p_file_paths" value="${dest_fileLocation}\NSQLExtract.xls"/>
+	<core:set var="rowNum" value="1" />
+	<core:set var="colNum" value="0" />
+	<core:new var="queryCount" className="java.util.HashMap" />
+	<core:new var="invalidqueryCount" className="java.util.HashMap" />
+	<core:set var="v_colcount" value="2" />
+
+
+	<core:if test="${username == null or passcode == null or SrcurlEndpoint == null or DesturlEndpoint == null or FolderPath == null}"> 
+
+		<gel:out>One of the input parameters is empty....aborting the script</gel:out>
+	</core:if>
+
+	<core:if test="${username != null and passcode != null and SrcurlEndpoint != null and DesturlEndpoint != null and FolderPath != null}"> 
+
+		<core:invoke method="trim" on="${FolderPath}" var="v_FolderPath" />
+		<core:new className="java.io.File" var="fpath">
+			<core:arg type="java.lang.String" value="${v_FolderPath}" />
+		</core:new>
+		<core:invoke method="isDirectory" on="${fpath}" var="fpath_check" />
+
+		<core:choose>
+			<core:when test="${fpath_check}">
+			
+				<gel:out>Creating folders as required...</gel:out>
+				
+				<core:invoke method="trim" on="${FolderPath}\Oracle" var="v_OraclePath" />
+				<core:new className="java.io.File" var="f_Ora">
+					<core:arg type="java.lang.String" value="${v_OraclePath}" />
+				</core:new>
+				<core:invoke method="mkdir" on="${f_Ora}" var="v_OraFolder" />
+				
+				<core:if test="${v_OraFolder}">
+				
+					<gel:out>Oracle Folder Path : ${FolderPath}\Oracle</gel:out>				
+					<core:set var="v_OraPath" value="${FolderPath}\Oracle"/>
+					<core:invoke method="trim" on="${v_OraPath}\Outputxmls" var="v_Oraxmls" />
+					<core:new className="java.io.File" var="f_Oraxml">
+						<core:arg type="java.lang.String" value="${v_Oraxmls}" />
+					</core:new>
+					<core:invoke method="mkdir" on="${f_Oraxml}" var="v_OraxmlFolder" />
+					<core:set var="v_OraXMLDir" value="${v_OraPath}\Outputxmls"/>					
+					
+					<core:invoke method="trim" on="${v_OraPath}\ColumnHeaders" var="v_OraColPath" />
+					<core:new className="java.io.File" var="f_OraCol">
+						<core:arg type="java.lang.String" value="${v_OraColPath}" />
+					</core:new>
+					<core:invoke method="mkdir" on="${f_OraCol}" var="v_OraColFolder" />
+					<core:set var="v_OraColDir" value="${v_OraPath}\ColumnHeaders"/>
+				
+				</core:if>
+				
+				
+				
+				<core:invoke method="trim" on="${FolderPath}\Postgres" var="v_PostgrePath" />
+				<core:new className="java.io.File" var="f_Pg">
+					<core:arg type="java.lang.String" value="${v_PostgrePath}" />
+				</core:new>
+				<core:invoke method="mkdir" on="${f_Pg}" var="v_PgFolder" />
+				
+				<core:if test="${v_PgFolder}">
+				
+					<gel:out>Postgre Folder Path : ${FolderPath}\Postgres</gel:out>				
+					<core:set var="v_PgPath" value="${FolderPath}\Postgres"/>
+					<core:invoke method="trim" on="${v_PgPath}\Outputxmls" var="v_Pgxmls" />
+					<core:new className="java.io.File" var="f_Pgxml">
+						<core:arg type="java.lang.String" value="${v_Pgxmls}" />
+					</core:new>
+					<core:invoke method="mkdir" on="${f_Pgxml}" var="v_PgxmlFolder" />	
+					<core:set var="v_PgXMLDir" value="${v_PgPath}\Outputxmls"/>
+					
+					<core:invoke method="trim" on="${v_PgPath}\ColumnHeaders" var="v_PgColPath" />
+					<core:new className="java.io.File" var="f_PgCol">
+						<core:arg type="java.lang.String" value="${v_PgColPath}" />
+					</core:new>
+					<core:invoke method="mkdir" on="${f_PgCol}" var="v_PgColFolder" />
+					<core:set var="v_PgColDir" value="${v_PgPath}\ColumnHeaders"/>
+				
+				</core:if>
+					
+				
+				<gel:out>
+				
+				Oracle End Point:${SrcurlEndpoint}
+				Oracle Path:${v_OraPath}
+				Oracle XML Path:${v_OraXMLDir}
+				PostGres End Point:${DesturlEndpoint}
+				PostGre Path:${v_PgPath}				
+				PostGres XML Path:${v_PgXMLDir}
+				
+				</gel:out>	
+				
+				<core:set value="ORACLE:${SrcurlEndpoint},PG:${DesturlEndpoint}" var="endpointURLs" />
+				
+				
+				<core:forEach items="${endpointURLs}" var="v_endpoint">
+					<util:tokenize delim=":" var="v_endpoint">${v_endpoint}</util:tokenize>
+					<core:set value="${v_endpoint[0]}" var="Database"/>
+					<core:if test="${Database == 'ORACLE'}">
+					<gel:out>setting Oracle Params	</gel:out>	
+						
+					<core:set value="${SrcurlEndpoint}" var="urlEndpoint"/>	
+					<core:set value="${FolderPath}" var="src_filelocation"/> 	
+					<core:set value="${v_OraXMLDir}" var="dest_xmlLocation"/>
+					<core:set value="${v_OraColDir}" var="dest_colHeadersLoc"/>	
+						
+						
+						
+					</core:if>
+					<core:if test="${Database == 'PG'}">
+					<gel:out>setting PG Params	</gel:out>	
+						
+					<core:set value="${DesturlEndpoint}" var="urlEndpoint"/>
+					<core:set value="${FolderPath}" var="src_filelocation"/>					
+					<core:set value="${v_PgXMLDir}" var="dest_xmlLocation"/>	
+					<core:set value="${v_PgColDir}" var="dest_colHeadersLoc"/>	
+						
+						
+					</core:if>		
+					
+					
+				</core:forEach>
+				
+				
+				
+
+				<core:catch var="f_exception">
+					<!--Creating a File object -->
+					<core:invoke method="trim" on="${src_filelocation}" var="src_filelocation" />
+					<core:new className="java.io.File" var="f">
+						<core:arg type="java.lang.String" value="${src_filelocation}" />
+					</core:new>
+					<!--Checking if it is a directory or Not?? -->
+					<core:invoke method="isDirectory" on="${f}" var="check" />
+					<core:choose>
+						<core:when test="${check}">
+							<!--Get the FileCount in the directory -->
+							<core:invoke method="list" on="${f}" var="files" />
+							<core:set value="${files.size()}" var="filecount" />
+							<!--If the file count is not empty then get the file names by looping through each file -->
+							<core:if test="${filecount != 0}">
+								<gel:out># of Files exist in the directory ${src_filelocation}: ${filecount}</gel:out>
+								<!--Create Workbook-->
+								<core:new className="org.apache.poi.hssf.usermodel.HSSFWorkbook" var="NSQLSuccessfulData"/>
+
+								<!--Create Sheet-->
+								<core:invoke method="createSheet" on="${NSQLSuccessfulData}" var="sheet">
+									<core:arg type="java.lang.String" value="NSQLCounts"/>
+								</core:invoke>
+
+								<core:new className="org.apache.poi.hssf.usermodel.HSSFWorkbook" var="NSQLFailureData"/>
+
+								<!--Create Sheet-->
+								<core:invoke method="createSheet" on="${NSQLFailureData}" var="sheet">
+									<core:arg type="java.lang.String" value="NSQLCounts"/>
+								</core:invoke>
+
+
+
+								<core:forEach items="${f.listFiles()}" var="file">
+									<core:set value="${file.getName()}" var="file_Name" />
+									<gel:out>Found a File with Name :${file_Name}</gel:out>
+
+
+
+									<core:set value="${src_filelocation}\${file_Name}" var="src_filelocation" />
+									<util:available file="${src_filelocation}">
+										<util:file name="${src_filelocation}" var="spreadsheetFile" />
+									</util:available>
+									<core:new className="java.io.FileInputStream" var="spreadsheetFileStream">
+										<core:arg type="java.io.File" value="${spreadsheetFile}" />
+									</core:new>
+									<core:invokeStatic className="org.apache.poi.ss.usermodel.WorkbookFactory" method="create" var="thisWorkbook">
+										<core:arg type="java.io.InputStream" value="${spreadsheetFileStream}" />
+									</core:invokeStatic>
+									<core:set value="${thisWorkbook.getSheetAt(0)}" var="thisWorksheet" />
+									<core:set value="${thisWorksheet.getSheetName()}" var="thisWorksheetName" />
+									<core:set value="${thisWorksheetName}" var="WorksheetName" />
+									<core:set value="${WorksheetName.toString()}" var="WorksheetName" />
+									<core:set value="${WorksheetName.trim()}" var="WName" />
+									<core:set value="${thistype.toString()}" var="thistype" />
+									<core:set value="${thistype.substring(7)}" var="thistype" />
+									<core:set value="${thistype.length()}" var="thistype_len" />
+									<core:set value="${thistype.substring(0,thistype_len-1)}" var="thistype" />
+									<core:set value="${thistype.trim()}" var="thistypevar" />
+									<core:set value="${thisWorksheet.getFirstRowNum()}" var="rowStart" />
+									<core:set value="${thisWorksheet.getLastRowNum()}" var="rowEnd" />
+									<gel:out>Validating Headers...</gel:out>
+									<core:forEach begin="${rowStart}" end="${rowEnd}" indexVar="i">
+										<core:set value="${thisWorksheet.getRow(i)}" var="r" />
+										<core:if test="${i == 0}">
+											<core:set value="${r.getLastCellNum()}" var="lColumn" />
+											<core:set value="" var="headers" />
+
+											<core:forEach begin="${0}" end="${lColumn-1}" indexVar="k">
+												<core:set value="${headers}||${r.getCell(k)}" var="headers" />		
+												<core:new className="java.util.Hashtable" var="headerNames"/>		
+												<core:set value="${columnNames.put(k, r.getCell(k))}" var="VOID"/>					 
+											</core:forEach>	
+											<gel:out>Headers in the file : ${headers}</gel:out>
+											<core:forEach escapeText="false" items="${columnNames.keys()}" var="cellName">
+												<core:set value="${columnNames.get(k, r.getCell(k))}" var="VOID"/>	
+											</core:forEach>
+										</core:if>
+										<core:if test="${i != 0}">
+											<core:set value="${r.getLastCellNum()}" var="lastColumn" />
+											<core:forEach begin="${0}" end="${lastColumn-1}" indexVar="j">
+												<core:set value="${r.getCell(j)}" var="querycode" />
+												<core:set value="${v_count + 1}" var="v_count" />
+												<core:if test="${j == 0}">
+													<gel:out>Data:${querycode}</gel:out>
+													<core:catch var="parse_Exp">
+
+														<soap:invoke endpoint="${urlEndpoint}" var="runResult">
+															<soap:message>
+																<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:quer="http://www.niku.com/xog/Query">
+																	<soapenv:Header>
+																		<quer:Auth>
+																			<quer:Username>${username}</quer:Username>
+																			<quer:Password>${passcode}</quer:Password>
+																		</quer:Auth>
+																	</soapenv:Header>
+																	<soapenv:Body>
+																		<quer:Query>
+																			<quer:Code>
+																	${querycode}
+																			</quer:Code>
+																		</quer:Query>
+																	</soapenv:Body>
+																</soapenv:Envelope>
+
+															</soap:message>
+														</soap:invoke>
+
+													</core:catch>
+
+													<core:catch var="serial_Exp">
+														<gel:serialize fileName="${dest_xmlLocation}\${querycode}.xml" var="${runResult}"/>
+
+													</core:catch>
+													<core:if test="${serial_Exp == null}">
+
+														<gel:out>Start Xml File Parse Test....</gel:out>
+
+														<x:parse var="RemoveNameSpace">
+															<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+																<xsl:output indent="yes" method="xml" encoding="utf-8" omit-xml-declaration="yes"/>
+																<xsl:template match="*">
+																	<xsl:element name="{local-name()}">
+																		<xsl:apply-templates select="@* | node()"/>
+																	</xsl:element>
+																</xsl:template>
+																<xsl:template match="@*">
+																	<xsl:attribute name="{local-name()}">
+																		<xsl:value-of select="."/>
+																	</xsl:attribute>
+																</xsl:template>
+																<xsl:template match="comment() | text() | processing-instruction()">
+																	<xsl:copy/>
+																</xsl:template>
+															</xsl:stylesheet>
+														</x:parse>
+														<gel:out>Prepared the namespace....</gel:out>
+														<x:parse var="xmlRawData" xml="file:\\\\${dest_xmlLocation}\${querycode}.xml"/>
+														<gel:out>Transformation starting....</gel:out>
+														<gel:parse var="gelXmlData">
+															<x:transform xml= "${xmlRawData}" xslt="${RemoveNameSpace}" />
+														</gel:parse>
+														<gel:out>Transformation completed....</gel:out>
+
+														<gel:set select="$gelXmlData//Slice" var="rec"/>
+														<gel:set var="count" select="$rec/Total/text()" asString="true"/>
+														<gel:out>No of Records returned for query - ${querycode}: ${count}</gel:out>
+														<core:set value="${queryCount.put(querycode, count)}" var="VOID"/>
+														<gel:out>Added an entry to the hasmap</gel:out>
+
+													</core:if>
+
+													<core:if test="${serial_Exp != null}">
+
+														<gel:out>Failed to get successful response</gel:out>
+
+														<core:set value="Failed to write data to file.Possible issue with the NSQL query" var="message"/>
+
+														<core:set value="${invalidqueryCount.put(querycode,message )}" var="VOID"/>
+
+
+
+
+
+													</core:if>
+
+												</core:if>
+											</core:forEach>
+										</core:if>
+									</core:forEach>
+								</core:forEach>
+								<gel:out>No of Records in hasmap - ${queryCount.size()}</gel:out>
+
+								<core:if test="${queryCount.size() !=  0 }">
+
+									<core:invoke method="createRow" on="${sheet}" var="v_rows">
+										<core:arg type="java.lang.Integer" value="0"/>
+									</core:invoke>
+									<core:invoke method="createCell" on="${v_rows}" var="v_rowcol">
+										<core:arg type="java.lang.Integer" value="0"/>
+									</core:invoke>
+									<core:invoke method="setCellValue" on="${v_rowcol}">
+										<core:arg type="java.lang.String" value="NSQLQueryID"/>
+									</core:invoke>
+									<core:invoke method="createCell" on="${v_rows}" var="v_rowcol">
+										<core:arg type="java.lang.Integer" value="1"/>
+									</core:invoke>
+									<core:invoke method="setCellValue" on="${v_rowcol}">
+										<core:arg type="java.lang.String" value="CountofRecordsReturned"/>
+									</core:invoke>
+
+
+
+									<core:forEach items="${queryCount.keySet()}" var="v_key">					
+
+										<core:invoke method="createRow" on="${sheet}" var="v_rows">
+											<core:arg type="java.lang.Integer" value="${rowNum}"/>
+										</core:invoke>
+										<core:invoke method="createCell" on="${v_rows}" var="v_rowcol">
+											<core:arg type="java.lang.Integer" value="0"/>
+										</core:invoke>
+										<core:invoke method="setCellValue" on="${v_rowcol}">
+											<core:arg type="java.lang.String" value="${v_key.toString()}"/>
+										</core:invoke>
+										<core:invoke method="createCell" on="${v_rows}" var="v_rowcol">
+											<core:arg type="java.lang.Integer" value="1"/>
+										</core:invoke>
+										<core:invoke method="setCellValue" on="${v_rowcol}">
+											<core:arg type="java.lang.String" value="${queryCount.get(v_key).toString()}"/>
+										</core:invoke>
+										<core:set value="${rowNum + 1}" var="rowNum"/>
+
+
+									</core:forEach>
+									<core:new className="java.io.FileOutputStream" var="fileOut">
+										<core:arg type="java.lang.String" value="${v_p_file_path}"/>
+									</core:new>
+									<!--Write Workbook To File Using Output Stream-->
+									<core:invoke method="write" on="${NSQLSuccessfulData}">
+										<core:arg type="java.io.FileOutputStream" value="${fileOut}"/>
+									</core:invoke>
+									<!--Close File Output Stream-->
+									<core:invoke method="close" on="${fileOut}"/>
+
+
+
+								</core:if>
+
+								<core:if test="${invalidqueryCount.size() !=  0 }">
+
+									<core:invoke method="createRow" on="${sheet}" var="v_rows">
+										<core:arg type="java.lang.Integer" value="0"/>
+									</core:invoke>
+									<core:invoke method="createCell" on="${v_rows}" var="v_rowcol">
+										<core:arg type="java.lang.Integer" value="0"/>
+									</core:invoke>
+									<core:invoke method="setCellValue" on="${v_rowcol}">
+										<core:arg type="java.lang.String" value="NSQLQueryID"/>
+									</core:invoke>
+									<core:invoke method="createCell" on="${v_rows}" var="v_rowcol">
+										<core:arg type="java.lang.Integer" value="1"/>
+									</core:invoke>
+									<core:invoke method="setCellValue" on="${v_rowcol}">
+										<core:arg type="java.lang.String" value="Reason For Failure"/>
+									</core:invoke>
+
+
+
+									<core:forEach items="${invalidqueryCount.keySet()}" var="v_key">					
+
+										<core:invoke method="createRow" on="${sheet}" var="v_rows">
+											<core:arg type="java.lang.Integer" value="${rowNum}"/>
+										</core:invoke>
+										<core:invoke method="createCell" on="${v_rows}" var="v_rowcol">
+											<core:arg type="java.lang.Integer" value="0"/>
+										</core:invoke>
+										<core:invoke method="setCellValue" on="${v_rowcol}">
+											<core:arg type="java.lang.String" value="${v_key.toString()}"/>
+										</core:invoke>
+										<core:invoke method="createCell" on="${v_rows}" var="v_rowcol">
+											<core:arg type="java.lang.Integer" value="1"/>
+										</core:invoke>
+										<core:invoke method="setCellValue" on="${v_rowcol}">
+											<core:arg type="java.lang.String" value="${invalidqueryCount.get(v_key).toString()}"/>
+										</core:invoke>
+										<core:set value="${rowNum + 1}" var="rowNum"/>
+
+
+									</core:forEach>
+									<core:new className="java.io.FileOutputStream" var="fileOut">
+										<core:arg type="java.lang.String" value="${v_p_file_fail_path}"/>
+									</core:new>
+									<!--Write Workbook To File Using Output Stream-->
+									<core:invoke method="write" on="${NSQLFailureData}">
+										<core:arg type="java.io.FileOutputStream" value="${fileOut}"/>
+									</core:invoke>
+									<!--Close File Output Stream-->
+									<core:invoke method="close" on="${fileOut}"/>
+
+
+
+								</core:if>
+
+
+
+
+								<core:if test="${queryCount.size() !=  0 }">
+
+
+									<core:catch var="f_exception_v1">
+										<!--Creating a File object -->
+										<core:invoke method="trim" on="${dest_xmlLocation}" var="v_tempLocation" />
+										<core:new className="java.io.File" var="f_v1">
+											<core:arg type="java.lang.String" value="${v_tempLocation}" />
+										</core:new>
+										<!--Checking if it is a directory or Not?? -->
+										<core:invoke method="isDirectory" on="${f_v1}" var="check_v1" />
+										<core:choose>
+											<core:when test="${check_v1}">
+												<!--Get the FileCount in the directory -->
+												<core:invoke method="list" on="${f_v1}" var="files_v1" />
+												<core:set value="${files_v1.size()}" var="filecount_v1" />
+												<!--If the file count is not empty then get the file names by looping through each file -->
+												<core:if test="${filecount_v1 != 0}">
+													<gel:out># of Files exist in the directory ${dest_xmlLocation}: ${filecount_v1}</gel:out>
+
+													<core:forEach items="${f_v1.listFiles()}" var="file_v1">
+														<core:new var="columnlist" className="java.util.HashMap" />
+														<core:set value="${file_v1.getName()}" var="file_Name_v1" />
+														<gel:out>Found a File with Name :${file_Name_v1}</gel:out>
+														<core:set value="${file_Name_v1.toString()}" var="fname_v1" />
+														<core:set value="${fname_v1.indexOf('.')}" var="fname_index" />
+														<core:set value="${fname_v1.substring(0, fname_index)}" var="propName"/>
+														<gel:out>Name without extension :${propName}</gel:out>
+														<core:set var="v_columncount" value="0"/>
+														<core:set var="v_rowcount" value="1"/>
+														<gel:out>Check ....${v_columncount}</gel:out>
+														<x:parse var="RemoveNameSpace">
+															<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+																<xsl:output indent="yes" method="xml" encoding="utf-8" omit-xml-declaration="yes"/>
+																<xsl:template match="*">
+																	<xsl:element name="{local-name()}">
+																		<xsl:apply-templates select="@* | node()"/>
+																	</xsl:element>
+																</xsl:template>
+																<xsl:template match="@*">
+																	<xsl:attribute name="{local-name()}">
+																		<xsl:value-of select="."/>
+																	</xsl:attribute>
+																</xsl:template>
+																<xsl:template match="comment() | text() | processing-instruction()">
+																	<xsl:copy/>
+																</xsl:template>
+															</xsl:stylesheet>
+														</x:parse>
+
+														<x:parse var="xmlRawData" xml="file:\\\\${dest_xmlLocation}\${file_Name_v1}"/>
+
+
+
+
+														<gel:parse var="gelXmlData">
+															<x:transform xml= "${xmlRawData}" xslt="${RemoveNameSpace}" />
+														</gel:parse>
+
+														<gel:set select="$gelXmlData//Record" var="rec"/>	
+
+
+														<gel:serialize fileName="${dest_colHeadersLoc}\header_${file_Name_v1}" var="${rec}"/>
+
+														<x:parse var="firstrecord" xml="file:\\\\${dest_colHeadersLoc}\header_${file_Name_v1}"/>
+
+
+														<x:parse var="getnodes">
+															<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+																<xsl:template match="/">
+																	<Columnnames>
+																		<xsl:apply-templates select="/*/*"/>
+																		<xsl:apply-templates select="/*/*/@*"/>
+																	</Columnnames>
+																</xsl:template>
+																<xsl:template match="*|@*">
+																	<columnname>
+																		<xsl:value-of select="name(.)"/>
+																	</columnname>
+																</xsl:template>
+
+
+															</xsl:stylesheet>
+														</x:parse>
+														<gel:parse var="getcolumnData">
+															<x:transform xml= "${firstrecord}" xslt="${getnodes}" />
+														</gel:parse>
+
+														<gel:out>#:::::ColumnName</gel:out>
+														<gel:forEach select="$getcolumnData//columnname" var="v_columnname">
+
+															<gel:set var="v_cname" select="$v_columnname/text()" asString="true"/>
+
+															<core:if test="${v_cname != 'nil'}">
+																<core:set value="${columnlist.put(v_columncount, v_cname)}" var="VOID"/>
+																<gel:out>${v_columncount}:::::${v_cname}</gel:out>
+															</core:if>
+															<core:set value="${v_columncount + 1}" var="v_columncount"/>
+
+														</gel:forEach>
+
+														<gel:out>Total Columns: ${columnlist.size()}</gel:out>
+
+														<core:if test="${columnlist.size() != 0 }">
+
+
+
+															<core:new className="org.apache.poi.hssf.usermodel.HSSFWorkbook" var="NSQLworkbook"/>
+
+															<!--Create Sheet start-->
+															<core:invoke method="createSheet" on="${NSQLworkbook}" var="sheet">
+																<core:arg type="java.lang.String" value="DataExtract"/>
+															</core:invoke>
+
+															<!--Create Sheet finish-->
+
+															<!-- creating a row start-->
+															<core:invoke method="createRow" on="${sheet}" var="v_rows">
+																<core:arg type="java.lang.Integer" value="0"/>
+															</core:invoke>
+															<!-- creating a row finish-->
+															<!-- inserting header record start-->
+															<core:forEach items="${columnlist.keySet()}" var="v_totcname">
+
+
+
+
+																<core:set value="${columnlist.get(v_totcname).toString()}" var="v_cname"/>	
+
+
+																<core:invoke method="createCell" on="${v_rows}" var="v_headercell">
+																	<core:arg type="java.lang.Integer" value="${v_totcname}"/>
+																</core:invoke>
+
+																<core:invoke method="setCellValue" on="${v_headercell}">
+																	<core:arg type="java.lang.String" value="${v_cname}"/>
+																</core:invoke>
+
+
+
+
+
+															</core:forEach>
+
+															<!-- inserting header record finish-->
+
+
+
+
+															<!-- writing Data start-->
+
+															<gel:forEach select="$gelXmlData//Record" var="v_totrecord">
+
+
+
+																<core:invoke method="createRow" on="${sheet}" var="v_rows">
+																	<core:arg type="java.lang.Integer" value="${v_rowcount}"/>
+																</core:invoke>
+
+
+																<core:forEach items="${columnlist.keySet()}" var="v_totcname">
+
+
+
+
+																	<core:set value="${v_totcname.toString()}" var="v_totcname_temp"/>	
+
+
+
+																	<core:set value="${columnlist.get(v_totcname).toString()}" var="v_cname"/>	
+
+																	<gel:set var="v_rowdata" select="$v_totrecord/*[name()=$v_cname]/text()" asString="true"/>	
+
+																	<core:invoke method="createCell" on="${v_rows}" var="v_rowcol">
+																		<core:arg type="java.lang.Integer" value="${v_totcname}"/>
+																	</core:invoke>
+
+																	<core:invoke method="setCellValue" on="${v_rowcol}">
+																		<core:arg type="java.lang.String" value="${v_rowdata}"/>
+																	</core:invoke>
+
+
+
+
+
+																</core:forEach>
+
+																<core:set value="${v_rowcount + 1}" var="v_rowcount"/>
+
+															</gel:forEach>
+
+
+
+															<gel:out>Writing to a file</gel:out>
+															<!-- writing Data finish-->
+
+															<!-- creating a file start-->
+															<core:new className="java.io.FileOutputStream" var="fileOut">
+																<core:arg type="java.lang.String" value="${dest_fileLocation}\${propName}.xls"/>
+															</core:new>
+
+															<!-- creating a file finish-->
+
+															<!--Write Workbook To File Using Output Stream start-->
+															<core:invoke method="write" on="${NSQLworkbook}">
+																<core:arg type="java.io.FileOutputStream" value="${fileOut}"/>
+															</core:invoke>
+															<!--Write Workbook To File Using Output Stream finish-->
+
+															<!--Close File Output Stream-->
+															<core:invoke method="close" on="${fileOut}"/>
+
+
+														</core:if>
+
+
+													</core:forEach>
+
+
+
+
+
+
+
+
+
+												</core:if>
+
+											</core:when>
+											<core:otherwise>
+												<gel:out>Invalid Directory : ${f}</gel:out>
+											</core:otherwise>
+										</core:choose>
+									</core:catch>
+								</core:if>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+							</core:if>
+							<core:if test="${filecount == 0}">
+								<gel:out>No Files exist in the directory ${src_filelocation}</gel:out>
+							</core:if>
+						</core:when>
+						<core:otherwise>
+							<gel:out>Invalid Directory : ${f}</gel:out>
+						</core:otherwise>
+					</core:choose>
+				</core:catch>
+				<core:choose>
+					<core:when test="${f_exception != null}">
+						<gel:out>Error :${f_exception}</gel:out>
+					</core:when>
+					<core:otherwise>
+						<gel:out>Execution of the Process has Completed</gel:out>
+					</core:otherwise>
+				</core:choose>
+
+			</core:when>
+			<core:otherwise>
+				<gel:out>Invalid Directory provided as parameter : ${fpath}</gel:out>
+				<gel:out>mission aborted</gel:out>
+			</core:otherwise>
+		</core:choose>
+
+	</core:if>
+
+
+
+
+
+	
+
+
+
+</gel:script>

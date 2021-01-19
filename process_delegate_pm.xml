@@ -1,0 +1,492 @@
+<gel:script xmlns:core="jelly:core" xmlns:file="jelly:com.niku.union.gel.FileTagLibrary" xmlns:ftp="jelly:com.niku.union.gel.FTPTagLibrary" xmlns:gel="jelly:com.niku.union.gel.GELTagLibrary" xmlns:soap="jelly:com.niku.union.gel.SOAPTagLibrary" xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:sql="jelly:sql" xmlns:util="jelly:util" xmlns:x="jelly:xml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xog="http://www.niku.com/xog">
+
+		<!-- purpose 
+		01/09/2015		Venkatasubramanian Venkatesan		Created
+		-->
+		<!-- DEBUGGING 0=Executes XOG with minm log, 1=Basic Logs only, 2=Entire XOG Output -->
+		<!--Header Message-->
+			<gel:parameter default="2" var="DEBUG"/>
+			<gel:parameter default="internal" var="xog_url"/>
+			<gel:parameter default="admin" var="XOG_USER"/>
+			<core:set value="false" var="v_errorFlag"/>
+			<gel:formatDate format="d'-'MMM'-'yyyy'T'HH':'mm':'SS" stringVar="v_current_date"/>
+			<gel:log category="GEL" level="INFO">*************** START PROCESS: ${p_processName} | Start Time: ${v_current_date}  ***************</gel:log>
+			<gel:log>*************** START PROCESS: Username Update | Start Time: ${v_current_date}  ***************</gel:log>
+			<gel:setDataSource dbId="niku"/>
+			<core:catch var="v_exception">
+				<!--Invoke class instances-->
+				<core:new className="com.niku.union.security.DefaultSecurityIdentifier" var="v_secId"/>
+				<core:invokeStatic className="com.niku.union.security.UserSessionControllerFactory" method="getInstance" var="userSessionCtrl"/>
+				<!--Log into clarity by initialising class instance-->
+				<core:set value="${userSessionCtrl.init(XOG_USER, v_secId)}" var="v_secId"/>
+				<core:set value="${v_secId.getSessionId()}" var="xogSessionId"/>
+				<gel:formatDate format="MM/dd/yyyy HH:mm:ss" stringVar="v_session_s"/>
+				<core:set value="${v_session_s}" var="v_session_s"/>
+				<core:if test="${DEBUG==2}">
+					<gel:log category="GEL" level="INFO">Session ID: ${xogSessionId}</gel:log>
+					<gel:log category="GEL" level="INFO">Username: ${v_secId.getUserName()}</gel:log>
+					<gel:log category="GEL" level="INFO">User Status: ${v_secId.getUserStatus()}</gel:log>
+					<gel:log category="GEL" level="INFO">Is User Logged In: ${v_secId.isUserLoggedIn()}</gel:log>
+				</core:if>
+			</core:catch>
+			<core:if test="${v_exception!=null}">
+				<gel:log category="GEL" level="ERROR">Unable to retrieve a Session ID: ${v_exception}</gel:log>
+				<gel:log>[GEL] Unable to retrieve a Session ID: ${v_exception}</gel:log>
+				<core:set value="true" var="v_errorFlag"/>
+			</core:if>
+			<core:catch var="v_sql_err">
+				<core:if
+				escapeText="1"
+				test="${DEBUG > 0}" trim="1">
+				<gel:log>Reading XOG version...</gel:log>
+				</core:if>
+
+				<sql:query var="v_version">
+					  SELECT DISTINCT INSTALLED_VERSION 
+					  FROM    CMN_INSTALL_HISTORY 
+					  WHERE   INSTALLED_DATE = (SELECT MAX(INSTALLED_DATE) 
+												FROM CMN_INSTALL_HISTORY 
+												WHERE UPPER(INSTALL_TYPE) = 'INSTALL' 
+												and install_id != 'contentPack::csk') 
+					  AND UPPER(INSTALL_TYPE) = 'INSTALL'
+				</sql:query>
+			</core:catch>
+			<core:choose>
+
+				<core:when test="${v_sql_err != null}">
+
+			
+
+				<gel:log
+				category="SQL" level="ERROR"> DB ERROR: Unable to query on Request details - ${v_sql_err}</gel:log>
+				</core:when>
+				<core:otherwise>
+
+				<core:set
+				value="${v_version.rows[0].INSTALLED_VERSION}" var="v_XOG_Version"/>
+
+				<core:if test="${DEBUG > 0}">
+
+				<gel:log
+				category="VERSION" level="INFO">Current Clarity Version has been set to ${v_XOG_Version}</gel:log>
+				</core:if>
+				</core:otherwise>
+			</core:choose>
+
+
+		
+
+			<core:catch var="v_queryError">
+				<sql:query  var="obj_query" escapeText="false">
+					<![CDATA[
+						
+						      SELECT   i.id prj_id ,i.code prj_code, i.name prj_name
+				FROM inv_investments i
+				inner join INV_PROJECTS p on p.prid=i.id and p.IS_TEMPLATE=0 and i.ODF_OBJECT_CODE='project' and i.is_active=1
+				inner join odf_multi_valued_lookups del on del.pk_id=i.id and attribute='scb_delegated_pm' and object='project'
+				inner join cmn_sec_users cmn on cmn.id=del.value and cmn.USER_STATUS_ID =200
+				WHERE  1=1
+				and not exists (
+				select 1 from 
+				clb_project_group_keys gk  
+				inner join cmn_sec_user_groups ug on ug.group_id = gk.PROJECT_MEMBERS_GROUP_ID
+							where gk.project_id = i.id and ug.user_id = cmn.id )
+				  union 
+				  SELECT   i.id prj_id ,i.code prj_code, i.name prj_name
+							FROM inv_investments i
+						inner join INV_PROJECTS p on p.prid=i.id and p.IS_TEMPLATE=0 and i.ODF_OBJECT_CODE='project' and i.is_active=1
+				  inner join odf_multi_valued_lookups del on del.pk_id=i.id and attribute='scb_delegated_pm' and object='project'
+						inner join cmn_sec_users cmn on cmn.id=del.value and cmn.USER_STATUS_ID =200
+					WHERE  1=1
+						and not exists (select 1 from   cmn_sec_user_groups cm_g 
+				  inner join cmn_sec_groups cmn1 on cmn1.id = cm_g.group_id    
+				  where group_code='SCB_PM' and cm_g.user_id = cmn.id ) 
+				  union
+				  SELECT  i.id prj_id ,i.code prj_code, i.name prj_name
+					FROM inv_investments i
+					inner join INV_PROJECTS p on p.prid=i.id and p.IS_TEMPLATE=0 and i.ODF_OBJECT_CODE='project' and i.is_active=1
+					inner join odf_multi_valued_lookups del on del.pk_id=i.id and attribute='scb_delegated_pm' and object='project'
+					inner join cmn_sec_users cmn on cmn.id=del.value and cmn.USER_STATUS_ID =200
+					left join (select user_id from 
+					cmn_sec_user_groups cm_g 
+					inner join cmn_sec_groups cmn on cmn.id = cm_g.group_id    
+					and group_code='SCB_PM' ) pm_Grp on pm_Grp.user_id = cmn.id
+					WHERE  not exists (
+					SELECT     1
+					FROM CMN_SEC_ASSGND_OBJ_PERM A
+					inner join CMN_SEC_GROUPS_V G on  A.RIGHT_ID = G.ID AND G.LANGUAGE_CODE = 'en'
+					WHERE
+					A.object_instance_id = i.id  AND A.PRINCIPAL_ID = cmn.id
+					and g.group_name in ('Project - Edit Management','Project - Manager (Auto)')) 
+					]]>
+				</sql:query>
+			</core:catch>
+			<core:if test="${v_queryError != Null}">
+				<gel:log level="ERROR">SQL ERROR = ${v_queryError} </gel:log>
+			</core:if>
+			<gel:log level="INFO">Count of Records = ${obj_query.rowCount} </gel:log>
+			
+			<core:forEach indexVar="i" items="${obj_query.rows}" var="row" escapeText="false">
+						<core:set value="${row.prj_name}" var="prj_name"/>
+						<core:set value="${row.prj_code}" var="prj_code"/>
+						<core:set value="${row.prj_id}" var="inv_id"/>
+							<core:catch var="v_p_exception">
+							<gel:parse var="appnode">
+								 <NikuDataBus
+													xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../xsd/nikuxog_project.xsd">
+													<Header
+										action="write"
+										externalSource="NIKU"
+										objectType="project" version="${v_XOG_Version}"/>
+										<Projects>
+											<Project
+													name="${prj_name}" projectID="${prj_code}">
+											<participants>
+												
+											</participants>
+										</Project>
+									</Projects>
+								</NikuDataBus>
+							</gel:parse>
+							<gel:parse var="grpnode">
+								<NikuDataBus xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../xsd/nikuxog_group.xsd">
+									  <Header action="write" externalSource="NIKU" objectType="group" version="7.5"/>
+									  <groups>
+										<group code="SCB_PM">
+											<nls description="SCB - Project Manager" languageCode="en" name="SCB - Project Manager"/>
+										  <members>
+											
+											
+										  </members>
+														
+										  </group>
+										</groups>
+									</NikuDataBus>
+							
+							</gel:parse>
+							<gel:parse var="v_xml_usr_ins">
+								<NikuDataBus xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../xsd/nikuxog_user.xsd">
+								  <Header action="write" externalSource="NIKU" objectType="user" version="14.2.0.237"/>
+									<Users/>
+									
+								</NikuDataBus>
+							
+							</gel:parse>
+						</core:catch>
+						
+						 <core:catch var="v_sql_err1">
+							<sql:query escapeText="false" var="cap_query">
+									
+									SELECT  i.id prj_id ,i.code prj_code, i.name prj_name,cmn.user_name,nvl(pm_grp.user_id,1) grp_add
+				FROM inv_investments i
+				inner join INV_PROJECTS p on p.prid=i.id and p.IS_TEMPLATE=0 and i.ODF_OBJECT_CODE='project' and i.is_active=1
+		  inner join odf_multi_valued_lookups del on del.pk_id=i.id and attribute='scb_delegated_pm' and object='project'
+				inner join cmn_sec_users cmn on cmn.id=del.value and cmn.USER_STATUS_ID =200
+		  left join (select user_id from 
+		  cmn_sec_user_groups cm_g 
+		  inner join cmn_sec_groups cmn on cmn.id = cm_g.group_id    
+		  and group_code='SCB_PM' ) pm_Grp on pm_Grp.user_id = cmn.id
+				WHERE  i.id=?
+				and not exists (
+				select 1 from 
+				clb_project_group_keys gk  
+				inner join cmn_sec_user_groups ug on ug.group_id = gk.PROJECT_MEMBERS_GROUP_ID
+							where gk.project_id = i.id and ug.user_id = cmn.id )
+
+								<sql:param value="${inv_id}"/>
+							</sql:query>
+						</core:catch>
+						<core:set value="${cap_query.getRowCount()}" var="v_count"/>
+						<core:choose>
+							<core:when test="${v_sql_err1 != null}">
+								<gel:log > DB ERROR: Unable to query on impacted app % - ${v_sql_err}</gel:log>
+								
+							</core:when>
+								<core:when test="${v_count == 0}">
+										<gel:log> No Particpants update required</gel:log>
+								</core:when>
+								<core:otherwise>
+								<core:forEach items="${cap_query.rows}" var="v_row">
+									<gel:parse var="ass_app">
+										 <resource userName="${v_row.user_name}"/>
+										
+									</gel:parse>
+									<gel:set insert="true" select="$appnode//Project/participants" value="${ass_app}"/> 
+									
+									
+								
+								
+								
+								</core:forEach>
+								</core:otherwise>
+						</core:choose>
+						<core:catch var="v_sql_err2">
+							<sql:query escapeText="false" var="grp_query">
+									
+									SELECT  i.id prj_id ,i.code prj_code, i.name prj_name,cmn.user_name,nvl(pm_grp.user_id,1) grp_add
+									FROM inv_investments i
+									inner join INV_PROJECTS p on p.prid=i.id and p.IS_TEMPLATE=0 and i.ODF_OBJECT_CODE='project' and i.is_active=1
+							  inner join odf_multi_valued_lookups del on del.pk_id=i.id and attribute='scb_delegated_pm' and object='project'
+									inner join cmn_sec_users cmn on cmn.id=del.value and cmn.USER_STATUS_ID =200
+							  left join (select user_id from 
+							  cmn_sec_user_groups cm_g 
+							  inner join cmn_sec_groups cmn on cmn.id = cm_g.group_id    
+							  and group_code='SCB_PM' ) pm_Grp on pm_Grp.user_id = cmn.id
+									WHERE  i.id=?
+										and not exists (select 1 from   cmn_sec_user_groups cm_g 
+						  inner join cmn_sec_groups cmn1 on cmn1.id = cm_g.group_id    
+						  where group_code='SCB_PM' and cm_g.user_id = cmn.id )
+
+								<sql:param value="${inv_id}"/>
+							</sql:query>
+						</core:catch>
+						<core:set value="${grp_query.getRowCount()}" var="v_count1"/>
+						<core:choose>
+							<core:when test="${v_sql_err2 != null}">
+								<gel:log > DB ERROR: Unable to query on impacted app % - ${v_sql_err}</gel:log>
+								
+							</core:when>
+								<core:when test="${v_count1 == 0}">
+									<gel:log> No group update required</gel:log>
+										
+								</core:when>
+								<core:otherwise>
+								<core:forEach items="${grp_query.rows}" var="v_row">
+								
+										<gel:parse var="grp_app">
+											<resource userName="${v_row.user_name}"/>
+										
+										</gel:parse>
+										<gel:set insert="true" select="$grpnode//group/members" value="${grp_app}"/> 
+									</core:forEach>
+								</core:otherwise> 
+						</core:choose>
+						<core:catch var="v_sql_err3">
+							<sql:query escapeText="false" var="res_query">
+									
+									SELECT  i.id prj_id ,i.code prj_code, i.name prj_name,cmn.user_name,nvl(pm_grp.user_id,1) grp_add, cmn.external_id, cmn.first_name,cmn.last_name,cmn.email_address
+										FROM inv_investments i
+										inner join INV_PROJECTS p on p.prid=i.id and p.IS_TEMPLATE=0 and i.ODF_OBJECT_CODE='project' and i.is_active=1
+								  inner join odf_multi_valued_lookups del on del.pk_id=i.id and attribute='scb_delegated_pm' and object='project'
+										inner join cmn_sec_users cmn on cmn.id=del.value and cmn.USER_STATUS_ID =200
+								  left join (select user_id from 
+								  cmn_sec_user_groups cm_g 
+								  inner join cmn_sec_groups cmn on cmn.id = cm_g.group_id    
+								  and group_code='SCB_PM' ) pm_Grp on pm_Grp.user_id = cmn.id
+										WHERE  i.id=?
+										and not exists (
+										SELECT     1
+									  FROM CMN_SEC_ASSGND_OBJ_PERM A
+										inner join CMN_SEC_GROUPS_V G on  A.RIGHT_ID = G.ID AND G.LANGUAGE_CODE = 'en'
+									  WHERE
+									 A.object_instance_id = i.id  AND A.PRINCIPAL_ID = cmn.id
+									  and g.group_name in ('Project - Edit Management','Project - Manager (Auto)'))
+
+								<sql:param value="${inv_id}"/>
+							</sql:query>
+						</core:catch>
+						<core:set value="${res_query.getRowCount()}" var="v_count2"/>
+						<core:choose>
+							<core:when test="${v_sql_err3 != null}">
+								<gel:log > DB ERROR: Unable to query on impacted app % - ${v_sql_err}</gel:log>
+								
+							</core:when>
+								<core:when test="${v_count2 == 0}">
+									<gel:log> No Instance Right update required</gel:log>
+										
+								</core:when>
+								<core:otherwise>
+								<core:forEach items="${res_query.rows}" var="v_row">
+								
+										
+									<gel:parse var="usernode">
+										<User externalId="${v_row.external_id}" userName="${v_row.user_name}">
+										<PersonalInformation emailAddress="${v_row.email_address}" firstName="${v_row.first_name}" lastName="${v_row.last_name}"/>
+											<Resource resourceId="${v_row.res_id}"/>
+											<InstanceRights>
+												<Right id="ProjectEditManagement">
+												  <InstanceObject id="${v_row.prj_code}" name="${v_row.prj_name}" type="SRM_PROJECTS"/>
+												</Right>
+												
+											</InstanceRights>
+										</User>
+									</gel:parse>
+										
+										
+										<gel:set insert="true" select="$v_xml_usr_ins//Users" value="${usernode}"/> 
+									</core:forEach>
+								</core:otherwise> 
+						</core:choose>
+						<core:set value="0" var="v_xogCnt"/>
+						<core:set value="0" var="v_xogCnt1"/>
+						<core:set value="0" var="v_xogCnt3"/>
+						<gel:forEach select="$grpnode//members/resource" var="v_cnt">
+							<core:set value="${v_xogCnt + 1}" var="v_xogCnt"/>
+						</gel:forEach>
+						<gel:forEach select="$appnode//participants/resource" var="v_cnt">
+							<core:set value="${v_xogCnt1 + 1}" var="v_xogCnt1"/>
+						</gel:forEach>
+						<gel:forEach select="$v_xml_usr_ins//Users/User" var="v_cnt">
+							<core:set value="${v_xogCnt3 + 1}" var="v_xogCnt3"/>
+						</gel:forEach>
+						<core:if test="${DEBUG > 1}">
+							<gel:log>Prj Input XMl: ${v_xogCnt1}:                <gel:expr select="$appnode"/> </gel:log>
+							<gel:log>Group  XMl: ${v_xogCnt}               <gel:expr select="$grpnode"/> </gel:log>
+							<gel:log>User Input XMl: ${v_xogCnt3}               <gel:expr select="$v_xml_usr_ins"/> </gel:log>
+						</core:if>
+						<core:if test="${v_xogCnt1 != 0}">
+								<core:catch var="v_xog_exception">
+									<soap:invoke endpoint="${xog_url}" var="runresult">
+										<soap:message>
+											<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xog="http://www.niku.com/xog">
+												<soapenv:Header>
+													<xog:Auth>
+														<xog:SessionID>${xogSessionId}</xog:SessionID>
+													</xog:Auth>
+												</soapenv:Header>
+												<soapenv:Body>
+													
+														<gel:include select="$appnode/"/>
+														
+															
+														
+													
+												</soapenv:Body>
+											</soapenv:Envelope>
+										</soap:message>
+									</soap:invoke>
+								</core:catch>
+								<core:if test="${v_xog_exception != null}">
+									<gel:log level="WARNING" category="XOG">Participant Xog failed</gel:log>
+									<gel:log>[XOG] XOG failed: ${v_xog_exception}</gel:log>
+									<core:set var="v_errorFlag" value="true"/>
+								</core:if>
+								<core:if test="${v_xog_exception == null and v_errorFlag == false}">
+								<!-- Write XOG Results --> 
+									<gel:set var="writeOutputRootAsString" select="$runresult//XOGOutput" asString="true"/>
+									<gel:set var="writeOutputRoot" select="$runresult//XOGOutput"/>
+									<gel:set var="XOGoutcome" select="$writeOutputRoot/Status/@state" asString="true"/>
+									
+									<core:if test="${DEBUG > 1}">
+										<gel:log category="XOG" level="INFO">[DEBUG START] Team Status: ${XOGoutcome}</gel:log>
+										<gel:log category="XOG" level="INFO">XOG Output: ${writeOutputRootAsString}</gel:log>										
+										<gel:log category="XOG" level="INFO">[DEBUG END]</gel:log>
+									</core:if>
+								</core:if>	
+		
+								<core:catch var="v_xogError">
+									<gel:set select="$runresult/soapenv:Envelope/soapenv:Body/XOGOutput" var="writeOutputRoot"/>
+									<gel:set asString="true" select="$writeOutputRoot/Status/@state" var="XOGoutcome"/>
+									<gel:set asString="true" select="$writeOutputRoot/Records/Record" var="XOGoutputrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@totalNumberOfRecords" var="XOGtotalrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@insertedRecords" var="XOGinsertedrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@updatedRecords" var="XOGupdatedrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@failureRecords" var="XOGfailurerecords"/>
+									<gel:log category="XOG" level="INFO">Team: ${roleName} XOG operation completed [Total ${XOGtotalrecords}, 
+									Inserted ${XOGinsertedrecords}, Updated ${XOGupdatedrecords}, Failed ${XOGfailurerecords}]</gel:log>
+								</core:catch> 
+								
+						</core:if>
+						<core:if test="${v_xogCnt != 0}">
+								<core:catch var="v_xog_exception">
+									<soap:invoke endpoint="${xog_url}" var="runresult">
+										<soap:message>
+											<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xog="http://www.niku.com/xog">
+												<soapenv:Header>
+													<xog:Auth>
+														<xog:SessionID>${xogSessionId}</xog:SessionID>
+													</xog:Auth>
+												</soapenv:Header>
+												<soapenv:Body>
+													<gel:include select="$grpnode/"/>
+									
+												</soapenv:Body>
+											</soapenv:Envelope>
+										</soap:message>
+									</soap:invoke>
+								</core:catch>
+								<core:if test="${v_xog_exception != null}">
+									<gel:log level="WARNING" category="XOG">Group Xog failed</gel:log>
+									<gel:log>[XOG] XOG failed: ${v_xog_exception}</gel:log>
+									<core:set var="v_errorFlag" value="true"/>
+								</core:if>
+								<core:if test="${v_xog_exception == null and v_errorFlag == false}">
+								<!-- Write XOG Results --> 
+									<gel:set var="writeOutputRootAsString" select="$runresult//XOGOutput" asString="true"/>
+									<gel:set var="writeOutputRoot" select="$runresult//XOGOutput"/>
+									<gel:set var="XOGoutcome" select="$writeOutputRoot/Status/@state" asString="true"/>
+									
+									<core:if test="${DEBUG > 1}">
+										<gel:log category="XOG" level="INFO">[DEBUG START] Group xog Status: ${XOGoutcome}</gel:log>
+										<gel:log category="XOG" level="INFO">XOG Output: ${writeOutputRootAsString}</gel:log>										
+										<gel:log category="XOG" level="INFO">[DEBUG END]</gel:log>
+									</core:if>
+								</core:if>	
+		
+								<core:catch var="v_xogError">
+									<gel:set select="$runresult/soapenv:Envelope/soapenv:Body/XOGOutput" var="writeOutputRoot"/>
+									<gel:set asString="true" select="$writeOutputRoot/Status/@state" var="XOGoutcome"/>
+									<gel:set asString="true" select="$writeOutputRoot/Records/Record" var="XOGoutputrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@totalNumberOfRecords" var="XOGtotalrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@insertedRecords" var="XOGinsertedrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@updatedRecords" var="XOGupdatedrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@failureRecords" var="XOGfailurerecords"/>
+									<gel:log category="XOG" level="INFO">Group: ${roleName} XOG operation completed [Total ${XOGtotalrecords}, 
+									Inserted ${XOGinsertedrecords}, Updated ${XOGupdatedrecords}, Failed ${XOGfailurerecords}]</gel:log>
+								</core:catch> 
+								
+						</core:if>
+						<core:if test="${v_xogCnt3 != 0}">
+								<core:catch var="v_xog_exception">
+									<soap:invoke endpoint="${xog_url}" var="runresult">
+										<soap:message>
+											<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xog="http://www.niku.com/xog">
+												<soapenv:Header>
+													<xog:Auth>
+														<xog:SessionID>${xogSessionId}</xog:SessionID>
+													</xog:Auth>
+												</soapenv:Header>
+												<soapenv:Body>
+													<gel:include select="$v_xml_usr_ins/"/>
+									
+												</soapenv:Body>
+											</soapenv:Envelope>
+										</soap:message>
+									</soap:invoke>
+								</core:catch>
+								<core:if test="${v_xog_exception != null}">
+									<gel:log level="WARNING" category="XOG">User Xog failed</gel:log>
+									<gel:log>[XOG] XOG failed: ${v_xog_exception}</gel:log>
+									<core:set var="v_errorFlag" value="true"/>
+								</core:if>
+								<core:if test="${v_xog_exception == null and v_errorFlag == false}">
+								<!-- Write XOG Results --> 
+									<gel:set var="writeOutputRootAsString" select="$runresult//XOGOutput" asString="true"/>
+									<gel:set var="writeOutputRoot" select="$runresult//XOGOutput"/>
+									<gel:set var="XOGoutcome" select="$writeOutputRoot/Status/@state" asString="true"/>
+									
+									<core:if test="${DEBUG > 1}">
+										<gel:log category="XOG" level="INFO">[DEBUG START] User xog Status: ${XOGoutcome}</gel:log>
+										<gel:log category="XOG" level="INFO">XOG Output: ${writeOutputRootAsString}</gel:log>										
+										<gel:log category="XOG" level="INFO">[DEBUG END]</gel:log>
+									</core:if>
+								</core:if>	
+		
+								<core:catch var="v_xogError">
+									<gel:set select="$runresult/soapenv:Envelope/soapenv:Body/XOGOutput" var="writeOutputRoot"/>
+									<gel:set asString="true" select="$writeOutputRoot/Status/@state" var="XOGoutcome"/>
+									<gel:set asString="true" select="$writeOutputRoot/Records/Record" var="XOGoutputrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@totalNumberOfRecords" var="XOGtotalrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@insertedRecords" var="XOGinsertedrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@updatedRecords" var="XOGupdatedrecords"/>
+									<gel:set asString="true" select="$writeOutputRoot/Statistics/@failureRecords" var="XOGfailurerecords"/>
+									<gel:log category="XOG" level="INFO">User: ${roleName} XOG operation completed [Total ${XOGtotalrecords}, 
+									Inserted ${XOGinsertedrecords}, Updated ${XOGupdatedrecords}, Failed ${XOGfailurerecords}]</gel:log>
+								</core:catch> 
+								
+						</core:if>
+				
+				
+			</core:forEach>
+			<core:set value="${userSessionCtrl.delete(v_secId)}" var="v_secId"/>			
+</gel:script>

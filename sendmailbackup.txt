@@ -1,0 +1,224 @@
+<gel:script
+	xmlns:core="jelly:core"
+	xmlns:gel="jelly:com.niku.union.gel.GELTagLibrary"
+	xmlns:util="jelly:util"
+	xmlns:sql="jelly:sql"
+>
+<gel:parameter var="send_to" default="sunne01@ca.com" />
+	<gel:parameter var="email_subject" default="A test HTML email from GEL" />
+	<gel:setDataSource dbId="Niku"/>
+	<core:invokeStatic className= "com.niku.union.config.ConfigurationManager" method= "getInstance" var= "config"/>
+	<core:set value="${config.getWebContextUrl()}" var="rootURL"/>
+
+	<sql:query escapeText="0" var="get_id">
+			<![CDATA[SELECT RES.EMAIL ,USR_GRP.USER_ID,I.ID
+FROM 
+ IMM_INCIDENTS I 
+ join  CMN_SEC_USERS USR on I.REPORTED_BY = USR.ID
+left outer join CMN_SEC_USER_GROUPS USR_GRP on USR.ID = USR_GRP.USER_ID 
+join CMN_SEC_GROUPS GRP on USR_GRP.GROUP_ID = GRP.ID AND GRP.GROUP_CODE = 'boi_imm_rev'
+ join SRM_RESOURCES RES on USR.ID= RES.USER_ID
+ WHERE
+   I.ID =${gel_objectInstanceId}]]>
+	</sql:query>
+
+	<core:set var="email_subject" value="An Incident is put on hold in Clarity" />
+
+	<core:set var="debug" value="${false}" />
+
+	<core:catch var="exception" escapeText="false">
+
+		<core:set var="logMessage" value="Starting code..." />	
+		<gel:log>${logMessage}</gel:log>
+
+		<core:set var="MailServer" value="ussjchstmail.ondemand.ca.com" />
+		<core:set var="logMessage" value="Mail server: ${MailServer}" />
+		
+		<core:set var="Sender" value="do-not-reply-ondemand@ca.com" />
+
+		
+		<core:set var="logMessage" value="Sending message from ${Sender} to ${send_to} via ${MailServer}" />
+		<gel:log>${logMessage}</gel:log>
+		
+
+		<core:new var="props" className="java.util.Properties" />
+
+		<core:set var="void" value="${props.put('mail.transport.protocol', 'smtp')}" />
+		<core:set var="void" value="${props.put('mail.smtp.host', MailServer)}" />
+
+		<core:set var="void" value="${props.put('mail.smtp.auth', 'true')}" />
+
+		<core:new var="clarity_auth" className="com.niku.union.notification.MailAuthenticator" />
+
+		<core:invokeStatic var="mailSession" className="javax.mail.Session" method="getInstance">
+			<core:arg type="java.util.Properties" value="${props}"/>
+			<core:arg type="javax.mail.Authenticator" value="${clarity_auth}"/>
+		</core:invokeStatic>
+		<core:new var="Sender" className="javax.mail.internet.InternetAddress">
+			<core:arg type="java.lang.String" value="${Sender}"/>
+		</core:new>
+		
+		<core:set var="void" value="${mailSession.setDebug(debug)}" />
+		<core:forEach items="${get_id.rowsByIndex}" var="v_row">
+			<sql:query escapeText="0" var="v_res_qry">
+			<![CDATA[
+SELECT DISTINCT
+		        I.INCIDENT_CODE AS INCIDENT_ID
+				,P.name AS Priority
+		        ,RES.full_name ASSIGNED_TO
+			    ,I.SUBJECT AS Short_Description
+				,I.ID 
+		        FROM 
+		        IMM_INCIDENTS I 
+				LEFT OUTER JOIN CMN_LOOKUPS_V P on I.priority_enum = P.lookup_code AND P.lookup_type = 'IMM_PRIORITY'and p.language_code = 'en'
+		        LEFT JOIN CMN_SEC_USERS C on I.REPORTED_BY = C.ID
+	            LEFT JOIN CMN_SEC_USER_GROUPS USR_GRP on  C.ID = USR_GRP.USER_ID
+			  LEFT JOIN CMN_SEC_GROUPS GRP on USR_GRP.GROUP_ID = GRP.ID 
+			  LEFT JOIN SRM_RESOURCES RES on C.ID= RES.USER_ID
+		   WHERE 
+		         I.ID =${gel_objectInstanceId}
+		        AND USR_GRP.USER_ID = ${v_row[1]}				
+]]>
+	</sql:query>
+		<core:new var="message" className="javax.mail.internet.MimeMessage">
+			<core:arg type="javax.mail.Session" value="${mailSession}"/>
+		</core:new>
+
+		<core:set var="void" value="${message.setSubject(email_subject)}" />
+
+
+
+		<core:set var="void" value="${message.setFrom(Sender)}" />
+
+		<core:invokeStatic var="rt" className="java.lang.Class" method="forName">
+			<core:arg type="java.lang.String" value="javax.mail.Message$RecipientType"/>
+		</core:invokeStatic>
+
+		<core:set var="rt" value="${rt.getField('TO')}" />
+		<core:set var="rt" value="${rt.TO}" />
+
+
+			<core:new var="sendToEmail" className="javax.mail.internet.InternetAddress">
+				<core:arg type="java.lang.String" value="${v_row[0]}"/>
+			</core:new>
+
+			<core:set var="void" value="${message.addRecipient(rt, sendToEmail)}" />
+
+
+	
+		<gel:parse var="htmlMessage">
+			<message>
+				<![CDATA[
+	<html>
+	<head>
+	<title>
+	</title>
+	<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1" />
+	<style type="text/css">
+	.s {
+		height: 0;
+		line-height: 1;
+		position: relative;
+		top: -0.6em;
+		vertical-align: baseline;
+		vertical-align: bottom;
+		font-size: xx-small;
+	}
+	.b {
+		font-weight: bold;
+	}
+	.r {
+		color: rgb(255,0,0);
+	}
+	table, th, td 
+
+	</style>
+	</head>
+	<body>
+	<font face="Arial">
+	<font size="2">
+	You are receiving this Email as a member of the Incident Review Team because an Incident has been put on hold by the Incident Management Team.<br/>
+	<br/>
+    Incident Information:
+	<br/>
+<br/><p/>
+	<table cellpadding="0"  cellspacing="4" border="0" >
+	<table cellpadding="0"  cellspacing="4" border="0" >
+	<font size="2">
+	<tr border="0">
+	<th border="0">INCIDENT ID</th>
+	<th border="0">PRIORITY</th>
+	<th border="0">ASSIGNED TO</th>
+	<th border="0">SHORT DESCRIPTION</th>
+	</tr>]]>
+	
+	<core:forEach
+                                    items="${v_res_qry.rowsByIndex}"
+                                    trim="true" var="v_row1"><![CDATA[
+	
+	<tr border="0">
+	<td border="0">${v_row1[0]}</td>
+	<td border="0">${v_row1[1]}</td>
+	<td border="0">${v_row1[2]}</td>
+	<td border="0">${v_row1[3]}</td></td>
+	</tr>]]></core:forEach><![CDATA[
+	</font>
+	</table>
+	</table><p/>
+	<b>For further details, you can review the incident by clicking on the link below</b><p/>
+<a href="${rootURL}/nu#action:itl.incidentObject&id&incidentListType=reportedBy&odf_pk=${v_row[2]}">Click here</a><br/> 
+<br/>
+<p/>Clarity Administrator<p/>
+      </font>
+	</font>
+	</body>
+	</html>
+	]]>
+			</message>
+		</gel:parse>
+
+		<gel:forEach var="thisMessageNode" select="$htmlMessage/message/node()">
+			<gel:set var="thisMessageNodeText" select="$thisMessageNode" asString="true"/>
+			<core:set var="thisMessageText" value="${thisMessageNodeText}" />
+		</gel:forEach>
+
+		<core:new var="multiPart" className="javax.mail.internet.MimeMultipart"/>
+
+		<core:new var="bodyPart" className="javax.mail.internet.MimeBodyPart"/>
+
+		<core:set var="void" value="${bodyPart.setContent(thisMessageText, 'text/html')}" />
+
+		<core:set var="void" value="${multiPart.addBodyPart( bodyPart )}" />
+
+		<core:set var="void" value="${message.setContent(multiPart)}" />
+
+		<core:set var="transport" value="${mailSession.getTransport()}" />
+
+		<core:set var="void" value="${transport.connect()}" />
+
+		<core:switch on="${transport.isConnected()}">
+        <core:if test="${v_res_qry.rowCount > 0 }">
+			<core:case value="${true}">
+				<core:set var="logMessage" value="Connected to mail server: ${MailServer}" />
+				<gel:log>${logMessage}</gel:log>
+				
+				<core:set var="void" value="${transport.send(message)}" />
+				<core:set var="void" value="${transport.close()}" />
+			</core:case>
+</core:if>
+			<core:default>
+				<core:new className="java.lang.Exception" var="exception">
+					<core:arg type="java.lang.String" value="Cannot connect to mail server: ${MailServer}" />
+				</core:new>
+			</core:default>
+
+		</core:switch>
+		</core:forEach>
+	</core:catch>
+
+	<core:if test="${exception != null}">
+		<core:set var="logMessage" value="ERROR: ${exception.getMessage()}" />
+		<gel:log>${logMessage}</gel:log>
+	</core:if>
+
+</gel:script>

@@ -1,0 +1,377 @@
+<gel:script xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" 
+    xmlns:core="jelly:core"
+    xmlns:gel="jelly:com.niku.union.gel.GELTagLibrary"
+    xmlns:soap="jelly:com.niku.union.gel.SOAPTagLibrary"
+    xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+    xmlns:sql="jelly:sql"
+    xmlns:xog="http://www.niku.com/xog"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:x="jelly:org.apache.commons.jelly.tags.xml.XMLTagLibrary">
+
+	
+	<!-- Declare parameters-->	
+	<gel:parameter var="XOG_Batch_Size" default="1"/>	
+	<gel:parameter default="http://saksr01-i154828:8081" var="SrcClarity"/>
+	<gel:parameter default="admin" var="SrcUser"/>
+	<gel:parameter default="admin" secure="true" var="SrcClrpassword"/>
+	<!-- Initialize Variables-->	
+	<core:set value="C:\DataMigration\Projects" var="FileLocation"/>
+	<core:set value="saksr01-I154826" var="srcDBHostName"/>
+	<core:set value="1521" var="srcDBPort"/>
+	<core:set value="clarity" var="srcDBName"/>
+	<core:set value="niku" var="srcDBUser"/>
+	<core:set value="niku" var="srcDBPasswd"/>	
+			
+						
+			<gel:formatDate format="yyyyMMDDhhmmss" stringVar="v_notif_date"/>
+	
+	<core:choose>
+		<core:when test="${srcDBVendor == 'SQL'}">
+			<sql:setDataSource url="jdbc:sqlserver://${srcDBHostName}:${srcDBPort};DatabaseName=${srcDBName}" driver="com.microsoft.jdbc.sqlserver.SQLServerDriver" 
+			user="${srcDBUser}" password="${srcDBPasswd}" var="srcDBConnection"/>
+		</core:when>
+		<core:otherwise>
+			<sql:setDataSource url="jdbc:oracle:thin:@//${srcDBHostName}:${srcDBPort}/${srcDBName}" driver="oracle.jdbc.driver.OracleDriver" user="${srcDBUser}" 
+			password="${srcDBPasswd}" var="srcDBConnection"/>
+		</core:otherwise>
+	</core:choose>
+	
+	<!-- Destination Database Server -->
+
+			
+
+
+<!-- Declare Variables-->
+	<core:set value="0" var="v_project_count"/>
+	<core:set value="0" var="nofrec"/>
+	<core:set value="0" var="failcnt"/>
+	<core:set value="0" var="successcnt"/>
+	<core:set value="0" var="xogcnt"/>
+	<core:set value="&#xa;" var="nline"/>
+	<core:set value="1" var="filecnt"/>
+	
+	
+	
+
+	<!-- ***************************************Get the Password from the system ***********************************-->
+	<!-- Login using username/pwd & get Session ID  -->
+
+<!-- Log into XOG and get a session ID -->
+  <soap:invoke endpoint="${SrcClarity}/niku/xog" var="auth">
+    <soap:message>
+      <soapenv:Envelope 	xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                           xmlns:xog="http://www.niku.com/xog">
+        <soapenv:Header/>
+        <soapenv:Body>
+          <xog:Login>
+            <xog:Username>${SrcUser}</xog:Username>
+            <xog:Password>${SrcClrpassword}</xog:Password>
+          </xog:Login>
+        </soapenv:Body>
+      </soapenv:Envelope>
+    </soap:message>
+  </soap:invoke>
+
+  <!-- Checking whether a sessionID is returned.  If not, it means that Login was unsuccessful -->
+  <gel:set asString="true" select="$auth/SOAP-ENV:Envelope/SOAP-ENV:Body/xog:SessionID/text()" var="SrcsessionID"/>
+  <core:choose>
+    <core:when test="${SrcsessionID == null}">
+      <gel:out>Couldn't Log in.  Check the username/password.</gel:out>
+    </core:when>
+    <core:otherwise>
+	<gel:out> Session id : ${SrcsessionID}</gel:out>
+	</core:otherwise>
+  </core:choose>
+
+  
+
+<!-- Call the DB Query  -->
+
+	<!-- ***************************************END Get the Password from the system ***********************************-->
+	<core:catch var="v_sql_err">
+		 <sql:query dataSource="${srcDBConnection}"  var="v_version">
+			SELECT 	DISTINCT INSTALLED_VERSION 
+			FROM    CMN_INSTALL_HISTORY
+			WHERE   INSTALLED_DATE = (SELECT MAX(INSTALLED_DATE) FROM CMN_INSTALL_HISTORY WHERE UPPER(INSTALL_TYPE) = 'INSTALL')
+				AND UPPER(INSTALL_TYPE) = 'INSTALL'
+		 </sql:query>
+	</core:catch>
+	<core:choose>
+		<core:when test="${v_sql_err != null}">
+			<gel:log level="ERROR" category="SQL"> DB ERROR: Unable to query for Installed Clarity Version - ${v_sql_err}</gel:log>
+		</core:when>
+		<core:otherwise>
+			<core:set var="Src_XOG_Version" value="${v_version.rows[0].INSTALLED_VERSION}"/>
+		</core:otherwise>
+	</core:choose>	
+	
+	
+	<gel:out>--------------------------------------------</gel:out>
+	<gel:out> Xog Source User Name = ${SrcUser}  </gel:out>
+	<gel:out> XOG SessionID = ${SrcsessionID}  </gel:out>
+	<gel:out> XOG Client Version = ${Src_XOG_Version}  </gel:out>
+	<gel:out>--------------------------------------------</gel:out>
+	
+	<core:if test="${SrcsessionID == null}">
+	<gel:out>Couldn't Log in to XOG. Check the username/password and Application has started</gel:out>
+	</core:if>
+	
+	
+	
+	<core:catch var="vSqlErr">
+		<sql:query dataSource="${srcDBConnection}" var="projinfo">
+			
+				select 
+					 code projcode
+					,odf.ofi_bus_sponsor bussponsor
+					,case  odf.ofi_classification when 'ofi_proj_class_tier1' then 'type100'
+													 when 'ofi_proj_class_tier4' then 'type200'
+													 when 'ofi_proj_class_regulat' then 'type300'
+													 when 'ofi_proj_class_operational' then 'type300'
+													 when 'ofi_proj_class_administrative' then 'type400'
+													 when 'ofi_proj_class_tops' then 'type500'
+													 when 'ofi_proj_class_management' then 'type600'
+                                 end obj_request_type       
+					,case odf.ofi_rgt_class       when 'TRANSFORM' then 'Grow'
+													when 'GROW' then 'Grow'
+													when 'RUN' then 'Run'
+											  else ofi_rgt_class end investment_goal
+					,case when odf.ofi_classification ='ofi_proj_class_tier1' and odf.ofi_segmentation ='ofi_segment_d1' then 'category101'
+						  when odf.ofi_classification ='ofi_proj_class_tier1' and odf.ofi_segmentation ='ofi_segment_d2' then 'category101'
+						  when odf.ofi_classification ='ofi_proj_class_tier1' and odf.ofi_segmentation ='ofi_segment_n2' then 'category104'
+						  when odf.ofi_classification ='ofi_proj_class_tier1' and odf.ofi_segmentation ='ofi_segment_n1' then 'category105'
+						  when odf.ofi_classification ='ofi_proj_class_tier4' and odf.ofi_segmentation ='ofi_segment_d1' then 'category201'
+						   when odf.ofi_classification ='ofi_proj_class_tier4' and odf.ofi_segmentation ='ofi_segment_d2' then 'category201'
+						  when odf.ofi_classification ='ofi_proj_class_tier4' and odf.ofi_segmentation ='ofi_segment_n2' then 'category204'
+						  when odf.ofi_classification ='ofi_proj_class_tier4' and odf.ofi_segmentation ='ofi_segment_n1' then 'category205'
+						  when odf.ofi_classification ='ofi_proj_class_operational' and odf.ofi_segmentation ='ofi_segment_d3' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_operational' and odf.ofi_segmentation ='ofi_segment_d4' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_operational' and odf.ofi_segmentation ='ofi_segment_n6' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_operational' and odf.ofi_segmentation ='ofi_segment_n3' then 'category301'
+						   when odf.ofi_classification ='ofi_proj_class_operational' and odf.ofi_segmentation ='ofi_segment_n4' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_operational' and odf.ofi_segmentation ='ofi_segment_n5' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_regulat' and odf.ofi_segmentation ='ofi_segment_d3' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_regulat' and odf.ofi_segmentation ='ofi_segment_d4' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_regulat' and odf.ofi_segmentation ='ofi_segment_n6' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_regulat' and odf.ofi_segmentation ='ofi_segment_n3' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_regulat' and odf.ofi_segmentation ='ofi_segment_n4' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_regulat' and odf.ofi_segmentation ='ofi_segment_n5' then 'category301'
+						  when odf.ofi_classification ='ofi_proj_class_administrative'  then 'category401'
+						  when odf.ofi_classification ='ofi_proj_class_tops'  then 'category501'
+						  when odf.ofi_classification ='ofi_proj_class_management'  then 'category601'
+											 end obj_request_category
+				from inv_investments inv 
+				join odf_ca_project odf on odf.id=inv.id
+				where odf_object_code='project' and 
+				code in (
+				'2007-1581','2008-0201','2008-0276','2008-0277','2008-0278','2008-0279','2009-0168','2009-0208','2010-0001','2010-0002','2010-0004','2010-0005','2010-0007','2010-0008','2010-0011','2010-0013','2010-0014','2010-0021','2010-0022','2010-0025','2010-0053','2010-0056','2010-0059','2010-0064','2010-0066','2010-0069','2010-0071','2010-0141','2010-0142','2010-0143','2010-0144','2010-0145','2010-0149','2010-0611','2011-0027','2011-0031','2011-0032','2011-0041','2011-0087','2011-0088','2011-0089','2011-0114','2011-0182','2011-0206','2011-0207','2011-0208','2011-0209','2011-0219','2011-0261','2011-0333','2011-0361','2011-0377','2011-0401','2012-0004','2012-0006','2012-0011','2012-0021','2012-0027','2012-0032','2012-0041','2012-0063','2012-0067','2012-0070','2012-0072','2012-0111','2012-0115','2012-0122','2012-0132','2012-0135','2012-0137','2012-0138','2012-0143','2012-0161','2012-0173','2012-0178','2012-0180','2012-0183','2012-0186','2012-0193','2012-0194','2012-0204','2013-0001','2013-0003','2013-0008','2013-0025','2013-0026','2013-0028','2013-0029','2013-0030','2013-0031','2013-0054','2013-0055','2013-0067','2013-0071','2013-0074','2013-0078','2013-0079','2013-0091','2013-0103','2013-0108','2013-0109','2013-0118','2013-0120','2013-0122','2013-0123','2013-0124','2013-0158','2013-0199','2013-0207','2013-0208','2013-0209','2013-0223','2013-0278','2013-0283','2013-0284','2013-0285','2013-0293','2013-0294','2013-0295','2013-0296','2013-0297','2013-0298','2013-0299','2013-0300','2013-0301','2013-0302','2013-0303','2013-0304','2013-0307','2013-0308','2013-0310','2013-0313','2013-0314','2013-0315','2013-0316','2013-0317','2013-0318','2013-0319','2013-0320','2013-0321','2013-0322','2013-0323','2013-0324','2013-0325','2013-0326','2013-0327','2013-0328','2013-0329','2013-0330','2013-0331','2013-0332','2013-0333','2013-0337','2013-0341','2013-0344','2014-0001','2014-0002','2014-0003','2014-0004','2014-0005','2014-0006','2014-0007','2014-0008','2014-0009','2014-0010','2014-0011','2014-0012','2014-0013','2014-0014','2014-0015','2014-0016','2014-0017','2014-0018','2014-0019','2014-0020','2014-0021','2014-0023','2014-0024','2014-0025','2014-0046','2014-0050','2014-0054','2014-0055','2014-0056','2014-0058','2014-0059','2014-0060','2014-0061','2014-0062','2014-0063','2014-0064','2014-0065','2014-0067','2014-0073','2014-0084','2014-0085','2014-0086','2014-0087','2014-0088','2014-0089','2014-0090','2014-0091','2014-0092','2014-0093','2014-0094','2014-0095','2014-0096','2014-0097','2014-0098','2014-0099','2014-0100','2014-0101','2014-0102','2014-0103','2014-0104','2014-0105','2014-0106','2014-0107','2014-0108','2014-0111','2014-0114','2014-0116','2014-0118','2014-0126','2014-0132','2014-0139','2014-0149','2014-0158','2014-0164','2014-0165','2014-0167','2014-0171','2014-0172','2014-0173','2014-0178','2014-0180','2014-0187','2014-0188','2014-0189','2014-0190','2014-0191','2014-0192','2014-0193','2014-0197','2014-0198','2014-0199','2014-0206','2014-0207','2014-0212','2014-0216','2014-0218','2014-0219','2014-0220','2014-0221','2014-0222','2014-0226','2014-0227','2014-0228','2014-0229','2014-0231','2014-0236','2014-0238','2014-0239','2014-0240','2014-0241','2014-0247','2014-0250','2014-0251','2014-0253','2014-0256','2014-0260','2014-0261','2014-0268','2014-0272','2014-0273','2014-0276','2014-0282','2014-0287','2014-0291','2014-0292','2014-0295','2014-0296','2014-0300','2014-0301','2014-0302','2014-0303','2014-0304','2014-0305','2014-0307','2014-0308','2014-0309','2014-0311','2014-0314','2014-0315','2014-0316','2014-0319','2015-0001','2015-0002','2015-0003','2015-0004','2015-0005','2015-0006','2015-0007','2015-0008','2015-0009','2015-0010','2015-0011','2015-0012','2015-0013','2015-0015','2015-0019','2015-0020','2015-0021','2015-0022','2015-0024','2015-0025','2015-0026','2015-0027','2015-0031','2015-0032','2015-0034','2015-0035','2015-0036','2015-0037','2015-0038','2015-0039','2015-0040','2015-0041','2015-0042','2015-0043','2015-0045','2015-0046','2015-0047','2015-0048','2015-0049','2015-0050','2015-0052','2015-0053','2015-0054','2015-0055','2015-0056','2015-0057','2015-0059','2015-0062','2015-0063','2015-0064','2015-0065','2015-0066','2015-0067','2015-0068','2015-0070','2015-0071','2015-0072','2015-0073','2015-0075','2015-0076','2015-0077','2015-0079','2015-0080','2015-0081','2015-0082','2015-0083','2015-0084','2015-0085','2015-0086','2015-0087','2015-0089','2015-0090','2015-0091','2015-0093','2015-0094','2015-0095','2015-0096','2015-0097','2015-0098','2015-0099','2015-0100','2015-0101','2015-0102','2015-0104')
+					
+		</sql:query>
+		
+	</core:catch>
+	
+	<core:choose>
+		<core:when test="${vSqlErr == null}">
+			<gel:parse var="v_xml_root">
+				<NikuDataBus xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../xsd/nikuxog_project.xsd">
+				  <Header version="${Src_XOG_Version}" action="write" objectType="project" externalSource="NIKU"/>
+				  <Projects>
+					
+				  </Projects>
+				</NikuDataBus>
+			</gel:parse>
+				<!--Parameters to remove tags in the output xml -->
+				<gel:parameter default="no" var="remove_custom_param"/>
+				<gel:parameter default="no" var="remove_obs_param"/>
+				<gel:parameter default="yes" var="remove_rights_param"/>
+				<gel:parameter default="yes" var="remove_internal_id"/>
+			
+			<core:set value="${projinfo.getRowCount()}" var="v_totrec"/>
+			<gel:out>Total Count: ${v_totrec}</gel:out>
+			<core:forEach  items="${projinfo.rows}" var="rows">
+						  <core:set value="${rows.get('projcode')}" var="projcode"/>	
+						  <core:set value="${rows.get('bussponsor')}" var="bussponsor"/>
+						  <core:set value="${rows.get('obj_request_type')}" var="obj_request_type"/>
+						  <core:set value="${rows.get('investment_goal')}" var="investment_goal"/>
+						  <core:set value="${rows.get('obj_request_category')}" var="obj_request_category"/>
+						  <core:set value="${nofrec+1}" var="nofrec"/>
+						  <core:set value="${xogcnt+1}" var="xogcnt"/>						  
+						
+					<gel:out> projcode: ${projcode}</gel:out> 
+					<!-- prepare the incident update xog -->
+					<gel:parse var="input">
+						<NikuDataBus xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../xsd/nikuxog_read.xsd">
+						  <Header version="${Src_XOG_Version}" action="read" objectType="project" externalSource="NIKU">
+							<args name="include_tasks" value="true"/>
+							<args name="include_dependencies" value="true"/>
+							<args name="include_subprojects" value="true"/>
+							<args name="include_resources" value="true"/>
+							<args name="include_baselines" value="true"/>
+							<args name="include_allocations" value="true"/>
+							<args name="include_estimates" value="true"/>
+							<args name="include_actuals" value="false"/>
+							<args name="include_custom" value="false"/>
+							<args name="include_burdening" value="false"/>
+						  </Header>
+						  <Query>
+							  <Filter name="projectID" criteria="EQUALS">${projcode}</Filter>
+						  </Query>
+						</NikuDataBus>		
+					</gel:parse>
+					<!-- xog the incident update xog xml-->
+					<core:catch var="xogerr">
+						 <soap:invoke endpoint="${SrcClarity}/niku/xog" var="output">
+							<soap:message>
+								<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xog="http://www.niku.com/xog">
+								<soapenv:Header>
+									<xog:Auth>
+									<xog:SessionID>${SrcsessionID}</xog:SessionID>
+									</xog:Auth>
+								</soapenv:Header>
+								<soapenv:Body>
+									<gel:include select="$input"/>
+								</soapenv:Body>
+								</soapenv:Envelope>
+							</soap:message>
+						</soap:invoke>
+					</core:catch>
+					<core:choose>
+						<core:when test="${xogerr != null}">
+							<core:set value="${xogerr.text()}" var="error_message"/>
+							<gel:log level="WARN" message="${error_message}"/>
+						</core:when>
+						<core:otherwise>	
+							<gel:out> Ready </gel:out> 
+							
+							<gel:set select="$output/soapenv:Envelope/soapenv:Body//Projects/Project" var="projRead"/>							
+							<!-- Removal of Custom info tag goes here -->							
+							<x:parse var="xog_xsl">
+
+								<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+									<xsl:template match="node()|@*">
+									  <xsl:copy>
+										 <xsl:apply-templates select="node()|@*"/>
+									  </xsl:copy>
+									</xsl:template>
+									
+									<core:if test="${remove_custom_param == 'yes'}">
+										<xsl:template match="CustomInformation"/>
+									</core:if>
+									
+									<core:if test="${remove_obs_param == 'yes'}">
+										<xsl:template match="OBSAssocs"/>
+										<xsl:template match="InstanceOBSRights"/>
+									</core:if>
+									
+									<xsl:template match="Task">		
+										<xsl:copy>
+										<xsl:apply-templates select="@* | *"/>
+										  <CustomInformation>
+												<ColumnValue name="task_internal_id"><xsl:value-of select="@internalTaskID"/></ColumnValue>
+											</CustomInformation>
+										</xsl:copy>
+									</xsl:template>
+																	
+									<core:if test="${remove_rights_param == 'yes'}">
+										<xsl:template match="Groups"/>
+										<xsl:template match="GlobalRights"/>
+										<xsl:template match="InstanceRights"/>
+										<xsl:template match="InstanceOBSRights"/>
+										<xsl:template match="@goalCode"/>	
+									</core:if>
+									
+									<core:if test="${remove_internal_id == 'yes'}">
+										<xsl:template match="@internalTaskID"/>	
+										<xsl:template match="@lastUpdatedBy"/>
+										<xsl:template match="@lastUpdatedDate"/>
+																					
+									</core:if>
+									<xsl:template match="Project">		
+										<xsl:copy>
+										 <xsl:attribute name="goalCode">${investment_goal}</xsl:attribute>
+										<xsl:apply-templates select="node()|@*"/>
+										</xsl:copy>
+									</xsl:template>
+									<xsl:template match="InvestmentAssociations">
+									  <xsl:copy-of select="."/>										
+												<CustomInformation>												
+													<ColumnValue name="partition_code">NIKU.ROOT</ColumnValue>
+													<ColumnValue name="ofi_bus_sponsor">${bussponsor}</ColumnValue>
+													<ColumnValue name="obj_request_type">${obj_request_type}</ColumnValue>
+													<ColumnValue name="obj_request_category">${obj_request_category}</ColumnValue>
+												</CustomInformation>
+									</xsl:template>
+									<xsl:template match="Segment[@sum='0.0000']"/>
+									
+									
+								</xsl:stylesheet>
+							</x:parse>
+								
+					
+								<x:parse var="xog_data">
+								<gel:include select="$projRead" />
+								</x:parse>
+								 
+
+								<gel:parse  escapeText="false" var="transformedxog">
+										<x:transform xml="${xog_data}" xslt="${xog_xsl}" />
+								</gel:parse>
+								
+								<gel:out> Transformation Applied </gel:out> 
+
+								
+							
+						
+							<gel:set insert="true" select="$v_xml_root//Projects" value="${transformedxog}"/>
+							<gel:out> Included in the Project XML </gel:out> 
+							<gel:out> xogcnt:${xogcnt} </gel:out> 
+							<core:if test="${xogcnt == XOG_Batch_Size or nofrec >= v_totrec}">
+							<gel:out>Total Number of Instances Written:${nofrec}</gel:out>
+							<gel:out>Writing to File Number:${filecnt}</gel:out>
+								<gel:serialize fileName="${FileLocation}\Project_File_${projcode}.xml" var="${v_xml_root}"/>
+								<core:set value="${filecnt+1}" var="filecnt"/>
+								<core:set value="0" var="xogcnt"/>
+								
+								<gel:parse var="v_xml_root">
+									<NikuDataBus xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../xsd/nikuxog_project.xsd">
+									  <Header version="${Src_XOG_Version}" action="write" objectType="project" externalSource="NIKU"/>
+									  <Projects>
+										
+									  </Projects>
+									</NikuDataBus>
+								</gel:parse>
+							</core:if>							 
+						</core:otherwise>
+					</core:choose>
+			</core:forEach> 
+						
+						
+				<!-- Log out of the XOG -->
+
+			
+				<soap:invoke endpoint="${SrcClarity}/niku/xog" var="logoutresult">
+					<soap:message>
+					  <soapenv:Envelope 	xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" 
+										   xmlns:xog="http://www.niku.com/xog">
+						<soapenv:Header>
+						  <xog:Auth>
+							<xog:SessionID>${SrcsessionID}</xog:SessionID>
+						  </xog:Auth>
+						</soapenv:Header>
+						<soapenv:Body>
+						  <xog:Logout/>
+						</soapenv:Body>
+					  </soapenv:Envelope>
+					</soap:message>
+				</soap:invoke>
+
+
+			
+		</core:when>
+		<core:otherwise>
+				<gel:out>Error : ${vSqlErr}.</gel:out>
+		</core:otherwise>
+	</core:choose>
+					
+</gel:script>

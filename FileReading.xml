@@ -1,0 +1,75 @@
+<gel:script xmlns:gel="jelly:com.niku.union.gel.GELTagLibrary" xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:core="jelly:core" xmlns:soap="jelly:com.niku.union.gel.SOAPTagLibrary" xmlns:sql="jelly:sql" xmlns:util="jelly:util" xmlns:xog="http://www.niku.com/xog" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+   <!--    File Movement for Resource Adaptor					 						-->
+   <!--	VERSION		: v1.0															-->
+   <!--	AUTHOR		: Sravan Sakkhari												-->
+   <!--	Change History																-->
+   <!--Connect to DB to run the SQL query -->
+   <!--	Declaration of custom parameters begins										-->
+   <gel:parameter default="" var="src_filelocation" />
+   <gel:parameter default="" var="dest_filelocation" />
+   <core:set value="${file.separator}" var="FS"/>
+   
+   <core:catch var="f_exception">
+      <!--Creating a File object -->
+      <core:invoke method="trim" on="${src_filelocation}" var="src_filelocation" />
+      <core:new className="java.io.File" var="f">
+         <core:arg type="java.lang.String" value="${src_filelocation}" />
+      </core:new>
+      <!--Checking if it is a directory or Not?? -->
+      <core:invoke method="isDirectory" on="${f}" var="check" />
+      <core:choose>
+         <core:when test="${check == true }">
+            <!--Get the FileCount in the directory -->
+            <core:invoke method="list" on="${f}" var="files" />
+            <core:set value="${files.size()}" var="filecount" />
+            <!--If the file count is not empty then get the file names by looping through each file -->
+            <core:if test="${filecount != 0}">
+               <gel:log># of Files exist in the directory ${src_filelocation}: ${filecount}</gel:log>
+               <core:forEach items="${f.listFiles()}" var="file">
+                  <core:set value="${file.getName()}" var="file_Name" />
+                  <gel:log>Found a File with Name :${file_Name}</gel:log>
+                  
+                     <core:catch var="p_exception">
+                        <core:new className="java.io.FileInputStream" var="v_In">
+						  <core:arg type="java.lang.String" value="${src_filelocation}${FS}${file_Name}"/>
+						</core:new>
+						<core:new className="java.io.InputStreamReader" var="v_Input">
+						  <core:arg type="java.io.FileInputStream" value="${v_In}"/>
+						</core:new>
+						<core:new className="java.io.BufferedReader" var="v_InputData">
+						  <core:arg type="java.io.InputStreamReader" value="${v_Input}"/>
+						</core:new>
+						<core:set value="${v_InputData.readLine()}" var="fileData"/>
+						<core:while test="${fileData != null}">
+                            <gel:log>${fileData}</gel:log>
+							<core:set value="${v_InputData.readLine()}" var="fileData"/>							
+                        </core:while>
+                     </core:catch>
+                     <core:choose>
+                        <core:when test="${p_exception != null}">
+                           <gel:log level="WARN">Error while reading the file - ${file}: ${p_exception}</gel:log>
+                        </core:when>
+                        <core:otherwise>
+                           <gel:log>File Reading successfully completed</gel:log>
+                        </core:otherwise>
+                     </core:choose>    
+               </core:forEach>
+            </core:if>
+            <core:if test="${filecount == 0}">
+               <gel:log level="WARN">No Files Exist in the Specified File Location</gel:log>
+            </core:if>
+         </core:when>
+         <core:otherwise>
+            <gel:log level="WARN">Invalid Directory : ${f}</gel:log>
+         </core:otherwise>
+      </core:choose>
+   </core:catch>
+   <core:choose>
+      <core:when test="${f_exception != null}">
+         <gel:log level="WARN">Error :${f_exception}</gel:log>
+      </core:when>
+      <core:otherwise>
+         <gel:log>Execution of the Process has Completed</gel:log>
+      </core:otherwise>
+   </core:choose>
+</gel:script>

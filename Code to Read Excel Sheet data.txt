@@ -1,0 +1,177 @@
+<gel:script xmlns:gel="jelly:com.niku.union.gel.GELTagLibrary" xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:core="jelly:core" xmlns:rem="jelly:com.niku.union.gel.RemedyTagLibrary" xmlns:soap="jelly:com.niku.union.gel.SOAPTagLibrary" xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:sql="jelly:sql" xmlns:util="jelly:util" xmlns:xog="http://www.niku.com/xog" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+   <!--  ****************************************GET THE XOG URL FROM THE APPLICATION  **********************************************  -->
+   <core:invokeStatic className="com.niku.union.config.ConfigurationManager" method="getInstance" var="config" />
+   <core:set value="${config.getProperties().getWebServer().getWebServerInstance(0).getEntryUrl()}" var="myXogUrl" />
+   <!--  ***************************************END GET XOG URL ***********************************  -->
+   <!--  GET THE USER ID OF THE INITIATOR OF THE PROCESS  -->
+   <core:set value="admin" var="myXogUser" />
+   <!--  GET THE USER ID OF THE INITIATOR OF THE PROCESS  -->
+   <gel:parameter default="ams_data_load" var="v_objectCode"/>
+   <gel:parameter default="odf_ca_${v_objectCode}" var="v_objectTable"/>
+   <gel:parameter default="upload_type" var="v_upload_type"/>
+   <gel:parameter default="ams_upload_data_file" var="v_ams_upload_data_file"/>
+   <core:new className="java.util.Hashtable" var="columnNames"/>
+   <!--  ***************************************Get the Password from the system ***********************************  -->
+   <core:new className="com.niku.union.security.DefaultSecurityIdentifier" var="secId" />
+   <core:invokeStatic className="com.niku.union.security.UserSessionControllerFactory" method="getInstance" var="userSessionCtrl" />
+   <core:set value="${userSessionCtrl.init(myXogUser, secId)}" var="secId" />
+   <core:set value="${secId.getPWD()}" var="myXogPass" />
+   <core:set value="${secId.getSessionId()}" var="sessionID" />
+   <!--  ***************************************END Get the Password from the system ***********************************  -->
+   <gel:setDataSource dbId="niku" />
+   <gel:log>${myXogUser} / ${myXogPass} : ${myXogUrl}</gel:log>
+   <gel:log>SessionID =  ${sessionID}</gel:log>
+   <core:choose>
+      <core:when test="${sessionID == null}">
+         <gel:log level="ERROR">Cannot login to Clarity XOG. Check username and password.</gel:log>
+      </core:when>
+      <core:otherwise>
+	  
+		<sql:query var="instanceData">
+			
+			SELECT 
+			code
+			FROM
+			 ${v_objectTable} 
+			WHERE
+			 id = ?
+			
+			<sql:param value="${gel_objectInstanceId}"/>
+		</sql:query>
+		<core:if test="${not empty(instanceData.rows[0].code)}">
+            <core:set value="${instanceData.rows[0].code}" var="v_instanceCode"/>
+		</core:if>
+	  
+         <core:set value="${java.io.tmpdir}" var="tmpDir" />
+         <util:replace newChar="/" oldChar="\" value="${tmpDir}" var="tmpDir" />
+         <util:replace new="/" old="//" value="${tmpDir}" var="tmpDir" />
+         <core:set value="${size(tmpDir) - 1}" var="tmpDirSize" />
+         <core:if test="${tmpDir.lastIndexOf('/') ne tmpDirSize}">
+            <core:set value="${tmpDir}/" var="tmpDir" />
+         </core:if>
+         <util:replace newChar="${file.separator}" oldChar="/" value="${tmpDir}" var="tmpDir" />
+         <gel:parse var="xogrequest">
+            <NikuDataBus>
+               <Header action="read" externalSource="NIKU" objectType="customObjectInstance" version="13">
+                  <args name="documentLocation" value="${tmpDir}" />
+               </Header>
+               <CustomObjectInstanceQuery>
+                  <Filter criteria="EQUALS" name="objectCode">${v_objectCode}</Filter>
+                  <Filter criteria="EQUALS" name="instanceCode">${v_instanceCode}</Filter>
+               </CustomObjectInstanceQuery>
+            </NikuDataBus>
+         </gel:parse>
+         <core:new className="com.niku.xog.client.XOGAdminClient" var="XOGAdminClient" />
+         <core:invoke method="processDoc" on="${XOGAdminClient}" var="xogresponse">
+            <core:arg type="org.w3c.dom.Document" value="${xogrequest}" />
+            <core:arg type="java.lang.String" value="${sessionID}" />
+         </core:invoke>
+         <core:set value="${file.separator}" var="FS" />
+         <core:set value="ss" var="thisInstanceCode" />
+         <gel:set select="$xogresponse//NikuDataBus/customObjectInstances/instance[./@instanceCode = $thisInstanceCode]/CustomInformation/ColumnValue[./@name = '${v_upload_type}']/text()" var="thistype" />
+         <gel:set select="$xogresponse//NikuDataBus/customObjectInstances/instance[./@instanceCode = $thisInstanceCode]/CustomInformation/ColumnValue[./@name = '${v_ams_upload_data_file}']/Documents" var="thisFile" />
+         <gel:set asString="true" select="$thisFile/Parent/@documentLocation/text()" var="thisFileLocation" />
+         <core:set value="${thisFileLocation}clarity${FS}Files${FS}" var="thisFileLocation" />
+         <gel:set asString="true" select="$thisFile/Parent/Document/Version/@id/text()" var="thisDocumentId" />
+         <core:set value="${thisDocumentId.substring(1,4)}" var="pathOne" />
+         <core:set value="00${thisDocumentId.substring(0,1)}" var="pathTwo" />
+         <core:set var="thisFileLocation">${thisFileLocation}${pathOne}${FS}${pathTwo}${FS}${thisDocumentId}</core:set>
+         <core:set value="Data file location: ${thisFileLocation}" var="logMessage" />
+         <gel:log>${FS}</gel:log>
+         <gel:log>${logMessage}</gel:log>
+         <util:available file="${thisFileLocation}">
+            <util:file name="${thisFileLocation}" var="spreadsheetFile" />
+         </util:available>
+         <core:new className="java.io.FileInputStream" var="spreadsheetFileStream">
+            <core:arg type="java.io.File" value="${spreadsheetFile}" />
+         </core:new>
+         <core:invokeStatic className="org.apache.poi.ss.usermodel.WorkbookFactory" method="create" var="thisWorkbook">
+            <core:arg type="java.io.InputStream" value="${spreadsheetFileStream}" />
+         </core:invokeStatic>
+         <core:set value="${thisWorkbook.getSheetAt(0)}" var="thisWorksheet" />
+         <core:set value="${thisWorksheet.getSheetName()}" var="thisWorksheetName" />
+         <core:set value="${thisWorksheetName}" var="WorksheetName" />
+         <core:set value="${WorksheetName.toString()}" var="WorksheetName" />
+         <core:set value="${WorksheetName.trim()}" var="WName" />
+         <core:set value="${thistype.toString()}" var="thistype" />
+         <core:set value="${thistype.substring(7)}" var="thistype" />
+         <core:set value="${thistype.length()}" var="thistype_len" />
+         <core:set value="${thistype.substring(0,thistype_len-1)}" var="thistype" />
+         <core:set value="${thistype.trim()}" var="thistypevar" />
+         <core:if test="${WName == thistypevar}">
+            <core:set value="${thisWorksheet.getFirstRowNum()}" var="rowStart" />
+            <core:set value="${thisWorksheet.getLastRowNum()}" var="rowEnd" />
+			<core:new className="java.util.Hashtable" var="thisRowData"/>
+            <gel:log>Validating Headers...</gel:log>
+            <core:forEach begin="${rowStart}" end="${rowEnd}" indexVar="i">
+               <core:set value="${thisWorksheet.getRow(i)}" var="r" />
+			    <core:if test="${i == 0}">
+				  <core:set value="${r.getLastCellNum()}" var="lColumn" />
+				  <core:set value="" var="headers" />
+                  <core:forEach begin="${0}" end="${lColumn-1}" indexVar="k">
+                     <core:set value="${headers}||${r.getCell(k)}" var="headers" />		
+					 <core:new className="java.util.Hashtable" var="headerNames"/>		
+					 <core:set value="${columnNames.put(k, r.getCell(k))}" var="VOID"/>					 
+				  </core:forEach>	
+				  <gel:log>Headers in the file : ${headers}</gel:log>
+					<core:forEach escapeText="false" items="${columnNames.keys()}" var="cellName">
+						<core:set value="${columnNames.get(k, r.getCell(k))}" var="VOID"/>	
+					</core:forEach>
+				</core:if>
+			
+               <core:if test="${i != 0}">
+                  <core:set value="${r.getLastCellNum()}" var="lastColumn" />
+                  <core:forEach begin="${0}" end="${lastColumn-1}" indexVar="j">
+                     <core:set value="${r.getCell(j)}" var="c" />
+                     <core:if test="${j == 0}">
+                        <gel:log>Data:${c}</gel:log>
+                        <core:if test="${thistypevar == 'RESOURCE'}">
+                           <gel:parse var="xogrequest">
+                             <NikuDataBus>
+                                 <Header version="6.0.13" action="read" objectType="resource" externalSource="NIKU">
+                                    <args name="include_management" value="true" />
+                                    <args name="include_custom" value="true" />
+                                    <args name="include_financial" value="true" />
+                                 </Header>
+                                 <Query>
+                                    <Filter name="resourceID" criteria="EQUALS">${c}</Filter>
+                                 </Query>
+                              </NikuDataBus>
+                           </gel:parse>
+                           <core:invoke method="processDoc" on="${XOGAdminClient}" var="xogresponse">
+                              <core:arg type="org.w3c.dom.Document" value="${xogrequest}" />
+                              <core:arg type="java.lang.String" value="${sessionID}" />
+                           </core:invoke>
+                           <gel:log>
+                              <gel:expr select="$xogresponse" />
+                           </gel:log>
+                        </core:if>
+						<core:if test="${thistypevar == 'PROJECT'}">
+                           <gel:parse var="xogrequest">
+                             
+                           </gel:parse>
+                           <core:invoke method="processDoc" on="${XOGAdminClient}" var="xogresponse">
+                              <core:arg type="org.w3c.dom.Document" value="${xogrequest}" />
+                              <core:arg type="java.lang.String" value="${sessionID}" />
+                           </core:invoke>
+                           <gel:log>
+                              <gel:expr select="$xogRESOURCEresponse" />
+                           </gel:log>
+                        </core:if>
+                     </core:if>
+                     <core:if test="${j != 0}" >
+					 
+					 
+					 
+					 
+					 </core:if>
+                  </core:forEach>
+               </core:if>
+            </core:forEach>
+         </core:if>
+         <core:if test="${WName != thistypevar}">
+            <gel:log level="WARN">Sheet Uploaded and Data Load Type selected in the application are not matching. Please update accordingly</gel:log>
+         </core:if>
+      </core:otherwise>
+   </core:choose>
+</gel:script>

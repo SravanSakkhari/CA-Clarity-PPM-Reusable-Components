@@ -1,0 +1,3141 @@
+<gel:script xmlns:core="jelly:core" xmlns:gel="jelly:com.niku.union.gel.GELTagLibrary" xmlns:ia="http://www.niku.com/xog/InvokeAction"
+  xmlns:q="http://www.niku.com/xog/Query" xmlns:soap="jelly:com.niku.union.gel.SOAPTagLibrary"
+  xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:sql="jelly:sql" xmlns:util="jelly:util" xmlns:x="jelly:xml"
+  xmlns:xog="http://www.niku.com/xog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <!-- GEL Script
+SCRIPT
+	clarity-file-loader_v12.gel
+	
+CUSTOMER
+	n/a - Generic component
+	Ericsson - Apr 2014
+
+DESCRIPTION
+	Generic component for attaching data (Excel) files to an Investment sub-object and processing the data records into Clarity
+	
+PARAMETERS
+	None - retrieves configuration data at runtime based on mapping of 'Data File Type' to an XML config document
+	
+PROPERTYFILE PARAMETERS
+	n/a
+
+OUTPUTS
+	- Sub-object instances below the 'File Loader' master object (actually a sub-object of Investment)
+	- Data instances in Clarity created/updated
+	- Both of the above are optional based on run-time configuration
+HISTORY                                                            
+	v12 - SKT - CA - 24 Feb 15 - Added ability to perform direct database inserts, rather than XOGs
+	v11 - SKT - CA - 20 Jan 15 - Added parameter 'document_folders' to enable clarity-specific document XOG folders (i.e. 'clarity/Files', vs. 'Files')
+	v11 - SKT - CA - 20 Jan 15 - Added logic to include column aliases when validating date_columns, number_columns, etc
+	v11 - SKT - CA - 15 Jan 15 - Changed formatting of numeric cells. Previously, Excel format was being used which failed on e.g. (123,456.78)
+	v10 - SKT - CA - 15 Jan 15 - Added support for to always padlock even on failed validation.
+	v09 - SKT - CA - 31 Oct 14 - Added support for ignoring rows with errors.
+	v08 - SKT - CA - 30 Oct 14 - Added support for running at command prompt (with Clarity GEL) with config files loaded locally.
+	v07 - SKT - CA - 27 Oct 14 - Added support for 'column_aliases' parameter.
+	v07 - SKT - CA - 27 Oct 14 - Moved getting of session Id into loop. Tried to ensure that logs URL is written even on error.
+	v07 - SKT - CA - 27 Oct 14 - Modified code to remove hard-coded reference to load type lookup - to support master object version
+	v06 - SKT - CA - 04 Aug 14 - Added support for 'pre_row_script' called as each row is read but before the (validation) post_row_script is run
+	v06 - SKT - CA - 04 Aug 14 - Removed hard-coding of data load table - prep for AZ application?
+	v05 - SKT - CA - 19 May 14 - Added fallback for invalid mime-type if file extension is 'xls' or 'xlsx'
+	v03 - SKT - CA - 15 May 14 - Added test on 'Is Read/Write' attribute. Could not get process step test to work on a Dev box so removed step test and coded in script instead
+	v02 - SKT - CA - 08 May 14 - Modified columns checks - was getting false positives for empty values
+	v01 - SKT - CA - 15 Apr 14 - Initial script, used at Ericsson
+
+BASED ON GEL TEMPLATE:
+Section below reserved for history of the base template code - do not modify
+v12 - skt - 14 Mar 14 - Cleaned up use of 'config' variable. Added more 'code folding'. Cleaned up text, etc for error emails - now parameter driven
+v11 - skt - 14 Jan 14 - Added code to output memory usage after each step.
+v10 - skt - 11 Dec 13 - Changed logic for URL construction. 'rootURL' needs to be the public URL as it is used in the error email, previously it was calculated from 'clarity_url' if supplied.
+v9 - skt - 21 Nov 13 - Added code to enable local JDBC connection if 'jdbc_url' parameter (plus others) is supplied.
+v9 - skt - 19 Nov 13 - Added code and parameter to enable 'xog_user' to be the user who invoked the process.
+v8 - skt - 08 Nov 13 - Added 'q' namespace to make parsing NSQL Query results easier.
+v8 - skt - 08 Nov 13 - Added code to set 'rootURL' where 'clarity_url' is set to 'internal'. Without this, the URLs in error email do not have correct content.
+v8 - skt - 08 Nov 13 - Added namespace for InvokeAction XOG plus code to look for XML parameters either with or without the namespace - have had issues with this on different Clarity systems.
+                                     Also, expanded code to enable XML document name, specified with 'xml_request_document' command-line parameter, to be used during Dev.
+v8 - skt - 08 Nov 13 - Changed error report email. Need to iterate through recipients as supplying a list doesn't work
+v7 - skt - 07 Nov 13 - Added loop timing code, Antons standard header
+v6 - skt - 15 Oct 13 - Re-arranged code slightly, added dummy core:if to enable rapid hiding of boilerplate code
+v5 - skt - 05 Sep 13 - Added logic to support 'break_on_xog_error' so the script exits on both FATAL XOG errors and ERROR level - NB: the script will always exit on FATAL, we now have a choice for ERROR level
+v4 - skt - 29 May 13 - Added logic to support 'internal' as a Clarity URL for XOG calls
+v4 - skt - 16 May 13 - Added logic to read parameters from XML document passed via Process XOG web service
+-->
+  <core:set var="templateName">outline-script</core:set>
+  <core:set var="templateVersion">12.0</core:set>
+  <!-- Section above reserved for history of the base template code - do not modify-->
+  <core:set var="scriptName">clarity-file-loader</core:set>
+  <core:set var="scriptVersion">12.0</core:set>
+  <!-- Dummy core:if to enable code folding in XMl editor -->
+  <core:if test="${true}">
+    <core:new className="java.util.GregorianCalendar" var="startTime"/>
+    <gel:parameter default="YES" var="show_step_timing"/>
+    <core:if test="${show_step_timing}">
+      <core:set value="${startTime}" var="stepTime"/>
+    </core:if>
+    <gel:parameter default="YES" var="show_step_memory"/>
+    <!-- Variables to control the log information written to an external log file - used when developing outside Clarity -->
+    <core:set var="timestamp_log">YES</core:set>
+    <core:set var="timestamp_log_file_name">no</core:set>
+    <core:set var="break_on_xog_error">YES</core:set>
+    <!-- When developing your code outside of Clarity a properties file can be loaded with the start values for your script variables -->
+    <gel:parameter default="" var="propertyfile"/>
+    <!-- User ID for XOG calls. Password only required if using XOG login - if getting Session ID directly then only 'xog_user' is needed -->
+    <gel:parameter default="clarity_file_loader" var="xog_user"/>
+    <gel:parameter default="password" secure="true" var="xog_password"/>
+    <gel:parameter default="no" var="process_user_is_xog_user"/>
+    <!-- If 'get_session_id' is set to 'YES' then internal Clarity calls are used to obtain Session ID. Note that Clarity doesn't care if 'xog_user' is inactive or locked a Session ID will still be supplied and will be valid -->
+    <gel:parameter default="no" var="get_session_id"/>
+    <!-- If 'clarity_url' is left empty then we will attempt to obtain the Scheduler URL in the code. If this is set to a URL then it over-rides the auto-obtaining of Scheduler URL -->
+    <!-- From v13 - setting this to 'internal' will force GEL to work it out for itself -->
+    <!-- NB: If the client uses XOG app servers in Prod, rather than re-direct the /niku/xog call, you should blank this and use Code Constants to supply a suitable URL value -->
+    <gel:parameter default="" var="clarity_url"/>
+    <!-- 'send_to_clarity' is a parameter which controls whether XOG is called later. By leaving set to 'no' you can test your code without sending anything to Clarity -->
+    <gel:parameter default="no" var="send_to_clarity"/>
+    <!-- 'use_direct_xog' is a parameter which controls whether XOG is called via web services or by internal Java method call. By over-riding to 'YES' you can avoid the network round-trip of the web service -->
+    <!-- NB: the internal method calls are undocumented and do not support all XOG calls -->
+    <gel:parameter default="no" var="use_direct_xog"/>
+    <!-- Some parameters for the location of the config files and stylesheets - can be over-ridden by code constants - use ful if we move the config to code constants at a client - doesn't need to be gel:parameter as likely it will be global change at a client -->
+    <core:set value="odf_ca_z_file_loader_config" var="config_table"/>
+    <core:set value="config_file" var="config_column"/>
+    <core:set value="odf_ca_z_file_loader_map" var="config_map_table"/>
+    <core:set value="name" var="config_map_column"/>
+    <gel:parameter default="z_file_loader_m" var="file_loader_table_root"/>
+    <core:set value="odf_ca_${file_loader_table_root}" var="file_loader_table"/>
+    <gel:parameter default="Z_FILE_LOAD_TYPE_M" var="file_loader_type_lookup"/>
+    <gel:parameter default="clarity-dataload.xml" var="dataload_config_file"/>
+    <gel:parameter default="no" var="always_padlock_record"/>
+    <gel:parameter default="6" var="max_decimal_places"/>
+    <gel:parameter default="clarity,Files" var="document_folders"/>
+    <core:set value="z_process_report_group" var="process_report_group"/>
+    <!-- Are we using the Code Constants object -->
+    <gel:parameter default="no" var="use_code_constants"/>
+    <!-- List of global parameters that are get from the Code Constants Object -->
+    <!-- Includes a suggested mapping for setting the URL of XOG app servers, if used by the client - also includes suggestions for the config files-->
+    <gel:parameter
+      default="dataload_table:file_loader_table,dataload_config_table:config_table,dataload_config_column:config_column,process_report_group,xog_url:clarity_url" var="code_constants_list"/>
+    <!--
+	<gel:parameter var="code_constants_list" default="ce_error_list:error_list,ce_error_subject:error_subject,ce_error_preamble:error_preamble,error_report_group:error_report_group,process_report_group:process_report_group,ce_warning_headings:warning_headings,ce_warning_sql:warning_sql,ce_warning_table_cols:warning_table_cols"/>
+	-->
+    <!-- Are we using GEL templates, i.e. scripts stored in Code Constants. This is only used as a safety check before we try to include the script file -->
+    <gel:parameter default="no" var="use_gel_templates"/>
+    <!-- 'verbose_logs' is a parameter which controls whether the XOG read/write files are logged -->
+    <!-- It is expected that verbose_logs is set to 'no' for Production, 'DEV' during development (with appropriate tests when logging) and 'YES' for debugging -->
+    <gel:parameter default="no" var="verbose_logs"/>
+    <!-- Regex which enables a match against verbose_logs. Enables more fine-grained logging than if verbose _logs is either 'no' or 'YES' -->
+    <core:set value="DEV|YES" var="devLogs"/>
+    <!-- Some parameters for the error email - can be over-ridden by code constants - doesn't need to be gel:parameter as likely it will be global change at a client -->
+    <core:set value="DO_NOT_REPLY@ca.com" var="error_email_sender"/>
+    <core:set value="Clarity Email" var="error_email_sender_name"/>
+    <core:set value="Errors/warnings in process" var="error_email_subject"/>
+    <core:set value="Errors or warnings have been reported by a Clarity process:" var="error_email_intro"/>
+    <core:set value="Error message:" var="error_email_msg_intro"/>
+    <!-- Set flags variable to indicate whether we are running in a process and/or developing our code inside/outside of GEL in Clarity 'bin' folder -->
+    <!-- We start by assuming that we are running in a standard XOG/GEL client -->
+    <core:set value="${true}" var="runningOutsideProcess"/>
+    <core:set value="${false}" var="runningInClarity"/>
+    <core:if test="${not empty(gel_processId)}">
+      <core:set value="${false}" var="runningOutsideProcess"/>
+      <core:set value="${true}" var="runningInClarity"/>
+    </core:if>
+    <core:if test="${not runningInClarity}">
+      <core:catch var="err">
+        <!-- Make a Clarity Java call which should only be available in Clarity BG or from GEL command in Clarity install 'bin' folder -->
+        <core:getStatic className="com.niku.calendar.util.CalendarConstants" field="TRUE" var="void"/>
+        <core:set value="${true}" var="runningInClarity"/>
+      </core:catch>
+      <core:remove var="err"/>
+    </core:if>
+    <!-- 'use_direct_xog' is only valid if we are in Clarity -->
+    <core:if test="${not runningInClarity}">
+      <core:set value="no" var="use_direct_xog"/>
+    </core:if>
+    <core:if test="${use_direct_xog}">
+      <core:new className="com.niku.xog.client.XOGClientInterface" var="XOGClientInterface"/>
+      <core:new className="com.niku.xog.client.XOGAdminClient" var="XOGAdminClient"/>
+    </core:if>
+  </core:if>
+  <!-- Catch any Exception. There is little we can do to reverse XOGs so we simply trap errors, log them and then exit -->
+  <core:catch var="err">
+    <!-- Dummy core:if to enable code folding in XMl editor -->
+    <core:if test="${true}">
+      <!-- Set up a useful pointer to the temporary folder -->
+      <gel:parameter default="" var="shared_folder"/>
+      <core:set value="${java.io.tmpdir}" var="tmpDir"/>
+      <core:if test="${not empty(shared_folder)}">
+        <core:set value="${shared_folder}" var="tmpDir"/>
+      </core:if>
+      <util:replace newChar="/" oldChar="\" value="${tmpDir}" var="tmpDir"/>
+      <util:replace new="/" old="//" value="${tmpDir}" var="tmpDir"/>
+      <core:set value="${size(tmpDir) - 1}" var="tmpDirSize"/>
+      <core:if test="${tmpDir.lastIndexOf('/') ne tmpDirSize}">
+        <core:set value="${tmpDir}/" var="tmpDir"/>
+      </core:if>
+      <util:replace newChar="${file.separator}" oldChar="/" value="${tmpDir}" var="tmpDir"/>
+      <!-- A boiler-plate line of code for conditionally writing to the process log or dumping to the screen -->
+      <!-- Note that gel:out is not used to write to screen. This is because the default behaviour of a Jelly script is to dump any text outside of a Tag to the default output stream (normally the screen). Doing it this way enables us to embed this code in e.g. a Java UI and capture the output to a UI component -->
+      <core:set value="Starting code..." var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+      <core:set value="Script Version: ${scriptVersion} (${scriptName})" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+      <core:set value="Code Template Version: ${templateVersion} (${templateName})" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+      <core:set value="Java version: ${java.version}" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+      <core:invokeStatic className="java.util.ResourceBundle" method="getBundle" var="xog_version">
+        <core:arg type="java.lang.String" value="xog"/>
+      </core:invokeStatic>
+      <core:set value="XOG/GEL version: ${xog_version.getString('version')}" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+      <!-- Load any initial variable values from a property file - used if developing outside of Clarity -->
+      <core:if test="${runningOutsideProcess}">
+        <core:if test="${not empty(propertyfile)}">
+          <core:set value="Looking for property file: ${propertyfile}" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log>${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+          <util:available file="${propertyfile}">
+            <util:properties escapeText="false" file="${propertyfile}"/>
+            <core:set value="Loaded: ${propertyfile}" var="logMessage"/>
+            <core:choose>
+              <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                  <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                  <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                </core:if>
+                <gel:log var="logMessageList">${logMessage}</gel:log>
+              </core:when>
+              <core:otherwise>
+                <gel:log>${logMessage}</gel:log>
+              </core:otherwise>
+            </core:choose>
+          </util:available>
+        </core:if>
+        <core:if test="${not empty(xml_request_document)}">
+          <util:available file="${xml_request_document}">
+            <gel:parse file="${xml_request_document}" var="xmlRequest"/>
+            <core:set value="Loaded: ${xml_request_document}" var="logMessage"/>
+            <core:choose>
+              <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                  <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                  <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                </core:if>
+                <gel:log var="logMessageList">${logMessage}</gel:log>
+              </core:when>
+              <core:otherwise>
+                <gel:log>${logMessage}</gel:log>
+              </core:otherwise>
+            </core:choose>
+          </util:available>
+        </core:if>
+        <core:if test="${not empty(jdbc_url)}">
+          <core:set value="Connecting to database: ${jdbc_url}" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log>${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+          <sql:setDataSource driver="${jdbc_driver}" password="${jdbc_password}" url="${jdbc_url}" user="${jdbc_user}"/>
+        </core:if>
+        <core:set value="${verbose_logs.toUpperCase()}" var="verbose_logs"/>
+        <core:if test="${verbose_logs}">
+          <core:forEach
+            items="propertyfile,timestamp_log,runningOutsideProcess,runningInClarity,use_code_constants,use_gel_templates,verbose_logs,use_direct_xog" var="thisParam">
+            <core:set value="Parameter value for '${thisParam}' = '${context.getVariable(thisParam)}'" var="logMessage"/>
+            <core:choose>
+              <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                  <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                  <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                </core:if>
+                <gel:log var="logMessageList">${logMessage}</gel:log>
+              </core:when>
+              <core:otherwise>
+                <gel:log>${logMessage}</gel:log>
+              </core:otherwise>
+            </core:choose>
+          </core:forEach>
+        </core:if>
+      </core:if>
+      <!-- If we are running in Clarity then we can get a Session ID and Clarity URL if required.Also run the initial SQL to get initial values for variables. NOTE that for developing outside Clarity the initial values for variables will be set in the properties file -->
+      <core:if test="${runningInClarity}">
+        <!-- Connect to the Clarity database -->
+        <gel:setDataSource dbId="niku"/>
+        <!-- Check for Code Constants parameter list -->
+        <core:if test="${use_code_constants eq 'YES' and (not empty(code_constants_list))}">
+          <!-- Create a Clarity encrypter - we might need it to decrypt a parameter -->
+          <core:invokeStatic className="com.niku.union.security.StringEncrypter" method="getDefaultInstance" var="stringEncrypter">
+            <core:arg type="java.lang.String" value="AES256"/>
+          </core:invokeStatic>
+          <core:forEach items="${code_constants_list}" var="constantId">
+            <util:tokenize delim=":" var="constantId">${constantId}</util:tokenize>
+            <core:set value="${constantId[0]}" var="variableId"/>
+            <core:if test="${size(constantId) gt 1}">
+              <core:set value="${constantId[1]}" var="variableId"/>
+            </core:if>
+            <core:set value="${constantId[0]}" var="constantId"/>
+            <sql:query var="constantsData">
+				SELECT
+				 x.*
+				
+
+                                  
+
+              <!--
+				,NVL2(x.const_large_string, DBMS_LOB.SUBSTR(x.const_large_string, 4000, 1), NULL) large_string
+				-->
+				FROM
+				 odf_ca_ut_constants x
+				WHERE
+				 x.code = ?
+				<sql:param value="${constantId}"/>
+            </sql:query>
+            <core:if test="${constantsData.RowCount ne 1}">
+              <core:set value="WARNING: Expected 1 row from Code Constants table, actually got ${constantsData.RowCount}" var="logMessage"/>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                  </core:if>
+                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                </core:when>
+                <core:otherwise>
+                  <gel:log level="WARN">${logMessage}</gel:log>
+                </core:otherwise>
+              </core:choose>
+            </core:if>
+            <core:set value="${null}" var="variableValue"/>
+            <core:forEach items="${constantsData.rows}" var="thisRow">
+              <core:switch on="${thisRow.type_of_constant}">
+                <!-- We assume encrypted string is small enough to fit in String attribute -->
+                <core:case value="encrypted_string">
+                  <core:set value="${thisRow.const_string}" var="variableValue"/>
+                  <core:invoke method="decrypt" on="${stringEncrypter}" var="variableValue">
+                    <core:arg type="java.lang.String" value="${variableValue}"/>
+                  </core:invoke>
+                </core:case>
+                <core:case value="string">
+                  <core:set escapeText="false" value="${thisRow.const_string}" var="variableValue"/>
+                </core:case>
+                <core:case value="large_string">
+                  <!--core:set var="variableValue" value="${thisRow.large_string}" /-->
+                  <core:new className="java.util.Scanner" var="scanner">
+                    <core:arg type="java.io.InputStream" value="${thisRow.const_large_string.getAsciiStream()}"/>
+                    <core:arg type="java.lang.String" value="UTF-8"/>
+                  </core:new>
+                  <core:invoke method="useDelimiter" on="${scanner}" var="scanner">
+                    <core:arg type="java.lang.String" value="\\A"/>
+                  </core:invoke>
+                  <core:set value="${scanner.next()}" var="variableValue"/>
+                  <core:mute>${scanner.close()}</core:mute>
+                </core:case>
+                <core:case value="integer">
+                  <core:set value="${thisRow.const_number}" var="variableValue"/>
+                </core:case>
+                <core:case value="decimal">
+                  <core:set value="${thisRow.const_number}" var="variableValue"/>
+                </core:case>
+                <core:case value="boolean">
+                  <core:set value="${thisRow.const_number}" var="variableValue"/>
+                </core:case>
+                <core:case value="date">
+                  <core:set value="${thisRow.const_date}" var="variableValue"/>
+                </core:case>
+                <core:case value="xml">
+                  <x:parse var="variableValue" xml="${thisRow.const_large_string.getAsciiStream()}"/>
+                </core:case>
+                <core:case value="gel_script">
+                  <!-- Variable used to point the current context of the GEL Script. This is used when a template is called so the template has access to the same context as its parent. Without this, process logging does not work for the template -->
+                  <core:if test="${empty(parentContext)}">
+                    <core:set value="${context}" var="parentContext"/>
+                  </core:if>
+                  <core:set value="${tmpDir}${variableId}.xml" var="thisFilename"/>
+                  <util:file name="${thisFilename}" var="thisFile"/>
+                  <core:set value="${0}" var="fileModified"/>
+                  <core:if test="${thisFile.exists()}">
+                    <core:set value="${thisFile.lastModified()}" var="fileModified"/>
+                  </core:if>
+                  <core:if test="${fileModified lt thisRow.last_updated_date.getTime()}">
+                    <gel:parse file="${thisRow.const_large_string.getAsciiStream()}" var="${variableId}"/>
+                    <gel:serialize fileName="${thisFilename}" var="${context.getVariable(variableId)}"/>
+                    <core:set value="Template file created: ${variableId} (${thisFilename})" var="logMessage"/>
+                    <core:choose>
+                      <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                          <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                          <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                        </core:if>
+                        <gel:log var="logMessageList">${logMessage}</gel:log>
+                      </core:when>
+                      <core:otherwise>
+                        <gel:log>${logMessage}</gel:log>
+                      </core:otherwise>
+                    </core:choose>
+                  </core:if>
+                  <core:set value="${thisFilename}" var="variableValue"/>
+                </core:case>
+                <core:case value="properties">
+                  <core:set escapeText="false" value="${thisRow.const_string}" var="variableValue"/>
+                  <core:new className="java.util.Scanner" var="scanner">
+                    <core:arg type="java.lang.String" value="${variableValue}"/>
+                  </core:new>
+                  <core:set escapeText="false" value="${scanner.nextLine()}" var="variableValue"/>
+                  <core:while test="${not empty(variableValue)}">
+                    <core:set value="${variableValue.indexOf('=')}" var="delimPos"/>
+                    <core:set value="${variableValue.substring(0, delimPos)}" var="propName"/>
+                    <core:set escapeText="false" value="${variableValue.substring(delimPos).substring(1)}" var="${propName}"/>
+                    <core:if test="${verbose_logs}">
+                      <core:set value="Setting ${propName} to '${context.getVariable(propName)}'" var="logMessage"/>
+                      <core:choose>
+                        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                          </core:if>
+                          <gel:log var="logMessageList">${logMessage}</gel:log>
+                        </core:when>
+                        <core:otherwise>
+                          <gel:log>${logMessage}</gel:log>
+                        </core:otherwise>
+                      </core:choose>
+                    </core:if>
+                    <core:set escapeText="false" value="${scanner.nextLine()}" var="variableValue"/>
+                  </core:while>
+                  <core:mute>${scanner.close()}</core:mute>
+                  <core:set value="properties" var="variableValue"/>
+                </core:case>
+              </core:switch>
+              <core:choose>
+                <core:when test="${variableValue eq null}">
+                  <core:set value="WARNING: Expected value for Code Constants '${constantId}' (${thisRow.type_of_constant}), actually got NULL" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log level="WARN">${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                </core:when>
+                <core:otherwise>
+                  <core:if test="${verbose_logs.matches(devLogs)}">
+                    <core:switch on="${thisRow.type_of_constant}">
+                      <core:case value="encrypted_string">
+                        <core:set value="Decrypted ${variableId} (${constantId})" var="logMessage"/>
+                        <core:choose>
+                          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                            </core:if>
+                            <gel:log var="logMessageList">${logMessage}</gel:log>
+                          </core:when>
+                          <core:otherwise>
+                            <gel:log>${logMessage}</gel:log>
+                          </core:otherwise>
+                        </core:choose>
+                      </core:case>
+                      <core:case value="xml">
+                        <core:set value="Read ${variableId} (${constantId}) as XML" var="logMessage"/>
+                        <core:choose>
+                          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                            </core:if>
+                            <gel:log var="logMessageList">${logMessage}</gel:log>
+                          </core:when>
+                          <core:otherwise>
+                            <gel:log>${logMessage}</gel:log>
+                          </core:otherwise>
+                        </core:choose>
+                      </core:case>
+                      <core:case value="gel_script">
+                        <core:set value="Template text loaded: ${variableId} (${variableValue})" var="logMessage"/>
+                        <core:choose>
+                          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                            </core:if>
+                            <gel:log var="logMessageList">${logMessage}</gel:log>
+                          </core:when>
+                          <core:otherwise>
+                            <gel:log>${logMessage}</gel:log>
+                          </core:otherwise>
+                        </core:choose>
+                      </core:case>
+                      <core:case value="properties">
+                        <core:set value="Values loaded from properties: ${constantId}" var="logMessage"/>
+                        <core:choose>
+                          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                            </core:if>
+                            <gel:log var="logMessageList">${logMessage}</gel:log>
+                          </core:when>
+                          <core:otherwise>
+                            <gel:log>${logMessage}</gel:log>
+                          </core:otherwise>
+                        </core:choose>
+                      </core:case>
+                      <core:default>
+                        <core:set value="Setting ${variableId} (${constantId}) to '${variableValue}'" var="logMessage"/>
+                        <core:choose>
+                          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                            </core:if>
+                            <gel:log var="logMessageList">${logMessage}</gel:log>
+                          </core:when>
+                          <core:otherwise>
+                            <gel:log>${logMessage}</gel:log>
+                          </core:otherwise>
+                        </core:choose>
+                      </core:default>
+                    </core:switch>
+                  </core:if>
+                  <core:set value="${variableValue}" var="${variableId}"/>
+                </core:otherwise>
+              </core:choose>
+            </core:forEach>
+          </core:forEach>
+        </core:if>
+        <core:if test="${(not runningOutsideProcess) and process_user_is_xog_user}">
+          <sql:query
+              var="processUser">
+			SELECT
+			 u.user_name user_name
+			FROM
+			 cmn_sec_users u
+			 INNER JOIN bpm_run_processes rp ON u.id = rp.initiated_by
+			WHERE
+			 rp.id = ?
+			<sql:param value="${gel_processInstanceId}"/>
+          </sql:query>
+          <core:if test="${not empty(processUser.rows[0].user_name)}">
+            <core:set value="${processUser.rows[0].user_name}" var="xog_user"/>
+            <core:set value="Setting 'xog_user' to '${xog_user}'" var="logMessage"/>
+            <core:choose>
+              <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                  <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                  <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                </core:if>
+                <gel:log var="logMessageList">${logMessage}</gel:log>
+              </core:when>
+              <core:otherwise>
+                <gel:log>${logMessage}</gel:log>
+              </core:otherwise>
+            </core:choose>
+          </core:if>
+        </core:if>
+        <!-- Get a valid Session ID by calling Clarity methods. NOTE that only the User ID is required. Note that either the properties file or Code Constants are able to supply a suitable 'xog_user' -->
+        <core:if test="${get_session_id}">
+          <core:new className="com.niku.union.security.DefaultSecurityIdentifier" var="secId"/>
+          <core:invokeStatic className="com.niku.union.security.UserSessionControllerFactory" method="getInstance" var="userSessionCtrl"/>
+          <core:set value="${userSessionCtrl.init(xog_user, secId)}" var="secId"/>
+          <core:set value="${secId.getSessionId()}" var="thisSessionId"/>
+          <core:choose>
+            <core:when test="${empty(thisSessionId)}">
+              <core:new className="java.lang.Exception" var="err">
+                <core:arg type="java.lang.String" value="Cannot get Session ID for user '${xog_user}'"/>
+              </core:new>
+              <!--core:break /-->
+            </core:when>
+            <core:otherwise>
+              <core:set value="Session ID: ${thisSessionId}" var="logMessage"/>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                  </core:if>
+                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                </core:when>
+                <core:otherwise>
+                  <gel:log>${logMessage}</gel:log>
+                </core:otherwise>
+              </core:choose>
+            </core:otherwise>
+          </core:choose>
+        </core:if>
+        <!-- Get a suitable Clarity URL from the Scheduler URL. Note that either the properties file or Code Constants are able to supply a suitable 'clarity_url' if the scheduler URL cannot be used -->
+        <core:invokeStatic className="com.niku.union.config.ConfigurationManager" method="getInstance" var="config"/>
+        <core:set value="${config.getWebContextUrl()}" var="rootURL"/>
+        <util:tokenize delim="/" var="rootURL">${rootURL}</util:tokenize>
+        <core:set value="${rootURL[0]}//${rootURL[1]}" var="rootURL"/>
+        <core:set value="Root URL: ${rootURL}" var="logMessage"/>
+        <core:choose>
+          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+            </core:if>
+            <gel:log var="logMessageList">${logMessage}</gel:log>
+          </core:when>
+          <core:otherwise>
+            <gel:log>${logMessage}</gel:log>
+          </core:otherwise>
+        </core:choose>
+        <core:if test="${empty(clarity_url)}">
+          <!--core:set var="config" value="${config.getProperties()}" /-->
+          <core:set value="${config.getProperties().getWebServer().getSchedulerUrl()}" var="clarity_url"/>
+          <core:choose>
+            <core:when test="${not empty(clarity_url)}">
+              <core:set value="Clarity URL from Scheduler URL: ${clarity_url}" var="logMessage"/>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                  </core:if>
+                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                </core:when>
+                <core:otherwise>
+                  <gel:log>${logMessage}</gel:log>
+                </core:otherwise>
+              </core:choose>
+            </core:when>
+            <core:otherwise>
+              <core:set value="${rootURL}" var="clarity_url"/>
+              <core:set value="Clarity URL from WebContext: ${clarity_url}" var="logMessage"/>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                  </core:if>
+                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                </core:when>
+                <core:otherwise>
+                  <gel:log>${logMessage}</gel:log>
+                </core:otherwise>
+              </core:choose>
+            </core:otherwise>
+          </core:choose>
+        </core:if>
+      </core:if>
+      <!-- Get XOG URL. We parse and process the supplied 'clarity_url' to get an appropriate XOG URL -->
+      <core:if test="${not empty(clarity_url)}">
+        <core:choose>
+          <core:when test="${clarity_url eq 'internal'}">
+            <core:set value="${clarity_url}" var="xogURL"/>
+          </core:when>
+          <core:otherwise>
+            <util:tokenize delim=":" var="urlComponents">${clarity_url}</util:tokenize>
+            <core:set value="${urlComponents[0]}://" var="httpMethod"/>
+            <core:set value="${urlComponents[1]}" var="servername"/>
+            <util:tokenize delim="/" var="servername">${servername}</util:tokenize>
+            <core:set value="${servername[0]}" var="servername"/>
+            <core:if test="${size(urlComponents) gt 2}">
+              <core:set value="${urlComponents[2]}" var="portnumber"/>
+            </core:if>
+            <core:choose>
+              <core:when test="${empty(portnumber)}">
+                <core:switch on="${httpMethod}">
+                  <core:case value="https://">
+                    <core:set var="portnumber">443</core:set>
+                  </core:case>
+                  <core:default>
+                    <core:set var="portnumber">80</core:set>
+                  </core:default>
+                </core:switch>
+              </core:when>
+              <core:otherwise>
+                <util:tokenize delim="/" var="portnumber">${portnumber}</util:tokenize>
+                <core:set value="${portnumber[0]}" var="portnumber"/>
+              </core:otherwise>
+            </core:choose>
+            <core:set value="${httpMethod}${servername}:${portnumber}/niku/xog" var="xogURL"/>
+          </core:otherwise>
+        </core:choose>
+      </core:if>
+      <core:set value="XOG URL: ${xogURL}" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+    </core:if>
+    <!-- END - Dummy core:if to enable code folding in XMl editor -->
+    <!-- YOUR CODE GOES HERE -->
+    <!-- Set any parameters you require -->
+    <core:set value="pre_load_script,pre_row_script,post_row_script,post_load_script" var="customScriptList"/>
+    <core:if test="${runningInClarity}">
+      <core:if test="${not runningOutsideProcess}">
+        <!-- v06 - Get Process ID for URL link -->
+        <sql:query
+            var="processID">
+			SELECT
+			 p.process_code process_code
+			FROM
+			 bpm_run_processes rp
+			 INNER JOIN bpm_def_process_versions pv ON rp.process_version_id = pv.id
+			 INNER JOIN bpm_def_processes p ON pv.process_id = p.id
+			WHERE
+			 rp.id = ?
+			<sql:param value="${gel_processInstanceId}"/>
+        </sql:query>
+        <core:if test="${not empty(processID.rows[0].process_code)}">
+          <core:set value="${processID.rows[0].process_code}" var="process_code"/>
+          <core:set value="Setting 'process_code' to '${process_code}'" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log>${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+        </core:if>
+      </core:if>
+      <core:if test="${not empty(testDataloadID)}">
+        <sql:update
+            var="updateCount">
+			UPDATE
+			 ${file_loader_table}
+			SET
+			 load_data = 'YES'
+			,is_read_write = 1
+			WHERE
+			 code = ?
+			<sql:param value="${testDataloadID}"/>
+        </sql:update>
+        <core:set value="[TEST] Run flag updated: ${updateCount}" var="logMessage"/>
+        <core:choose>
+          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+            </core:if>
+            <gel:log var="logMessageList">${logMessage}</gel:log>
+          </core:when>
+          <core:otherwise>
+            <gel:log>${logMessage}</gel:log>
+          </core:otherwise>
+        </core:choose>
+      </core:if>
+      <sql:query var="dataloadData">
+		SELECT 
+		 x.*
+		FROM
+		 ${file_loader_table} x
+		WHERE
+		 id = ?
+		<sql:param value="${gel_objectInstanceId}"/>
+      </sql:query>
+      <core:if test="${dataloadData.RowCount ne 1}">
+        <core:set value="Expecting 1 row of root Dataload data, actually got ${dataloadData.RowCount}" var="logMessage"/>
+        <core:choose>
+          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+            </core:if>
+            <gel:log var="logMessageList">${logMessage}</gel:log>
+          </core:when>
+          <core:otherwise>
+            <gel:log level="WARN">${logMessage}</gel:log>
+          </core:otherwise>
+        </core:choose>
+        <core:break/>
+      </core:if>
+      <core:set value="${dataloadData.rows[0]}" var="dataloadData"/>
+      <core:set value="${dataloadData.code}" var="dataload_code"/>
+    </core:if>
+    <!-- v4/8 - Over-ride parameters by reading passed XML document (if any) -->
+    <core:if test="${not runningOutsideProcess}">
+      <!-- If no doc then GEL barfs so we need to trap the exception -->
+      <core:catch var="void">
+        <gel:getDocument var="xmlRequest"/>
+      </core:catch>
+    </core:if>
+    <core:if test="${not empty(xmlRequest)}">
+      <core:set value="Reading parameters from XML document" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+      <core:set escapeText="false" value="Reading using 'ia' (http://www.niku.com/xog/InvokeAction) namespace" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+      <gel:forEach select="$xmlRequest//ia:Parameters/ia:Parameter" var="thisParameter">
+        <gel:set asString="true" select="$thisParameter/@name/text()" var="thisParameterID"/>
+        <gel:set asString="true" select="$thisParameter/text()" var="thisParameterValue"/>
+        <core:set value="Setting ${thisParameterID} to '${thisParameterValue}'" var="logMessage"/>
+        <core:choose>
+          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+            </core:if>
+            <gel:log var="logMessageList">${logMessage}</gel:log>
+          </core:when>
+          <core:otherwise>
+            <gel:log>${logMessage}</gel:log>
+          </core:otherwise>
+        </core:choose>
+        <core:set value="${thisParameterValue}" var="${thisParameterID}"/>
+      </gel:forEach>
+      <core:if test="${empty(thisParameter)}">
+        <core:set escapeText="false" value="Reading without namespace" var="logMessage"/>
+        <core:choose>
+          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+            </core:if>
+            <gel:log var="logMessageList">${logMessage}</gel:log>
+          </core:when>
+          <core:otherwise>
+            <gel:log>${logMessage}</gel:log>
+          </core:otherwise>
+        </core:choose>
+        <gel:forEach select="$xmlRequest//Parameters/Parameter" var="thisParameter">
+          <gel:set asString="true" select="$thisParameter/@name/text()" var="thisParameterID"/>
+          <gel:set asString="true" select="$thisParameter/text()" var="thisParameterValue"/>
+          <core:set value="Setting ${thisParameterID} to '${thisParameterValue}'" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log>${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+          <core:set value="${thisParameterValue}" var="${thisParameterID}"/>
+        </gel:forEach>
+      </core:if>
+    </core:if>
+    <!-- Enter the main loop -->
+    <!-- Store the initial values for 'send_to_clarity' as we will need it at the start of each loop -->
+    <core:set value="${send_to_clarity}" var="paramSendToClarity"/>
+    <!-- Store the initial values for 'use_direct_xog' as we will need it at the start of each loop -->
+    <core:set value="${use_direct_xog}" var="paramUseDirectXOG"/>
+    <core:if test="${show_step_timing}">
+      <core:set value="${stepTime}" var="lastStepTime"/>
+      <core:new className="java.util.GregorianCalendar" var="stepTime"/>
+      <core:set value="Time taken for initialisation: ${(stepTime.getTimeInMillis() - lastStepTime.getTimeInMillis())/1000} seconds" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+    </core:if>
+    <core:if test="${show_step_memory}">
+      <core:invokeStatic className="java.lang.Runtime" method="getRuntime" var="thisRuntime"/>
+      <core:set value="Initial memory: ${(thisRuntime.totalMemory())/(1024 * 1024)} Mb" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+    </core:if>
+    <!-- Loop around the logical processing steps for your script -->
+    <core:set value="log_out" var="processSteps"/>
+    <core:set value="xog_data_file,get_config,cache_stylesheets,cache_scripts,do_dataloads,run_post_load_scripts,update_status,${processSteps}" var="processSteps"/>
+    <core:if test="${dataloadData.load_data eq 'YES'}">
+      <core:if test="${empty(dataloadData.requestor)}">
+        <core:set value="set_requestor,${processSteps}" var="processSteps"/>
+      </core:if>
+    </core:if>
+    <core:set value="get_session_id,test_record_values,set_name_and_status,${processSteps}" var="processSteps"/>
+    <core:forEach items="${processSteps}" var="processStep">
+      <core:set value="Process step: ${processStep}" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log>${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+      <core:set value="${processStep}" var="innerLoopItems"/>
+      <!-- Re-set 'send_to_clarity' at the top of each loop -->
+      <core:set value="${paramSendToClarity}" var="send_to_clarity"/>
+      <!-- Re-set 'use_direct_xog' at the top of each loop -->
+      <core:set value="${paramUseDirectXOG}" var="use_direct_xog"/>
+      <!-- NB: 'xogrequest' is removed at the start of each loop and 'xogresponse' is removed at the end of each loop. If 'xogresponse' has data which is needed for a subsequent stap then make sure you extract it to a variable at the end of the loop -->
+      <core:remove var="xogrequest"/>
+      <core:if test="${show_step_memory}">
+        <core:set value="${thisRuntime.totalMemory()}" var="stepMemory"/>
+        <core:set value="${thisRuntime.freeMemory()}" var="stepFreeMemory"/>
+      </core:if>
+      <!-- Perform pre-XOG processing based on the step we have reached in the loop -->
+      <!-- START OF SCRIPT PROCESSING LOGIC -->
+      <core:switch on="${processStep}">
+        <core:case value="get_session_id">
+          <core:set value="no" var="send_to_clarity"/>
+          <core:if test="${get_session_id}">
+            <core:new className="com.niku.union.security.DefaultSecurityIdentifier" var="secId"/>
+            <core:invokeStatic className="com.niku.union.security.UserSessionControllerFactory" method="getInstance" var="userSessionCtrl"/>
+            <core:set value="${userSessionCtrl.init(xog_user, secId)}" var="secId"/>
+            <core:set value="${secId.getSessionId()}" var="thisSessionId"/>
+            <core:choose>
+              <core:when test="${empty(thisSessionId)}">
+                <core:new className="java.lang.Exception" var="err">
+                  <core:arg type="java.lang.String" value="Cannot get Session ID for user '${xog_user}'"/>
+                </core:new>
+                <core:break/>
+              </core:when>
+              <core:otherwise>
+                <core:set value="Session ID: ${thisSessionId}" var="logMessage"/>
+                <core:choose>
+                  <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                      <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                      <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                    </core:if>
+                    <gel:log var="logMessageList">${logMessage}</gel:log>
+                  </core:when>
+                  <core:otherwise>
+                    <gel:log>${logMessage}</gel:log>
+                  </core:otherwise>
+                </core:choose>
+              </core:otherwise>
+            </core:choose>
+          </core:if>
+        </core:case>
+        <core:case value="test_record_values">
+          <core:set value="no" var="send_to_clarity"/>
+          <core:choose>
+            <core:when test="${dataloadData.is_read_write ne 1}">
+              <core:new className="java.lang.Exception" var="err">
+                <core:arg type="java.lang.String" value="Dataload record is padlocked, cannot process data"/>
+              </core:new>
+            </core:when>
+            <core:when test="${empty(dataloadData.data_file)}">
+              <core:if test="${empty(dataloadData.file_location)}">
+                <core:new className="java.lang.Exception" var="err">
+                  <core:arg type="java.lang.String" value="One of 'Data File' or 'File Location' must be specified"/>
+                </core:new>
+              </core:if>
+            </core:when>
+          </core:choose>
+          <core:break test="${not empty(err)}"/>
+          <core:if test="${not empty(dataloadData.file_location)}">
+            <core:set value="file_location" var="fileDataSource"/>
+          </core:if>
+          <core:if test="${not empty(dataloadData.data_file)}">
+            <core:set value="data_file" var="fileDataSource"/>
+          </core:if>
+        </core:case>
+        <core:case value="set_name_and_status">
+          <sql:query
+              var="updateData">
+				SELECT 
+				 x.code
+				,lv.name||' - '||f.name name
+				,(CASE WHEN x.load_data = 'YES' THEN 'z_loading' ELSE 'z_validating' END) process_status
+				FROM
+				 ${file_loader_table} x
+				 INNER JOIN cmn_lookups_v lv ON (x.file_type = lv.lookup_code AND lv.lookup_type = ? and lv.language_code = 'en')
+				 LEFT OUTER JOIN clb_dms_folders fold ON x.data_file = fold.id
+				 LEFT OUTER JOIN clb_dms_files f ON fold.id = f.parent_folder_id
+				WHERE
+				 x.id = ?
+				<sql:param value="${file_loader_type_lookup}"/>
+            <sql:param value="${dataloadData.id}"/>
+          </sql:query>
+          <core:if test="${updateData.RowCount ne 1}">
+            <core:new className="java.lang.Exception" var="err">
+              <core:arg type="java.lang.String" value="Expecting 1 row of Dataload name data, actually got ${updateData.RowCount}"/>
+            </core:new>
+            <core:break/>
+          </core:if>
+          <core:set value="${updateData.rows[0]}" var="updateData"/>
+          <!-- Always use 'xogrequest' - the XOG handling code later assumes 'xogrequest' holds the XOG data -->
+          <gel:parse var="xogrequest">
+            <NikuDataBus>
+              <Header action="write" externalSource="OTHER" objectType="customObjectInstance" version="13"/>
+              <customObjectInstances objectCode="${file_loader_table_root}">
+                <instance instanceCode="${updateData.code}" objectCode="${file_loader_table_root}">
+                  <CustomInformation>
+                    <ColumnValue name="code">${updateData.code}</ColumnValue>
+                    <ColumnValue name="name">${updateData.name}</ColumnValue>
+                    <ColumnValue name="process_message">${updateData.process_status}</ColumnValue>
+                    <ColumnValue name="process_logs_url">/niku/nu#action:z_process_logs_obj&amp;object_code=${file_loader_table_root}&amp;instance_id=${dataloadData.id}&amp;process_code=${process_code}</ColumnValue>
+                  </CustomInformation>
+                </instance>
+              </customObjectInstances>
+            </NikuDataBus>
+          </gel:parse>
+          <!-- Set 'send_to_clarity' - if you don't the XOG handling code later will not be triggered -->
+          <!--core:set var="send_to_clarity" value="YES" /-->
+        </core:case>
+        <core:case value="set_requestor">
+          <!-- Refresh the dataloadData as it might have been modified by prior steps -->
+          <sql:query var="dataloadData">
+				SELECT 
+				 x.*
+				FROM
+				 ${file_loader_table} x
+				WHERE
+				 id = ?
+				<sql:param value="${gel_objectInstanceId}"/>
+          </sql:query>
+          <core:set value="${dataloadData.rows[0]}" var="dataloadData"/>
+          <!-- Get the process initiator -->
+          <core:if test="${not runningOutsideProcess}">
+            <sql:query
+                var="dataloadRequestor">
+					SELECT
+					 s.unique_name resource_id
+					FROM
+					 cmn_sec_users u
+					 INNER JOIN bpm_run_processes rp ON u.id = rp.initiated_by
+					 INNER JOIN srm_resources s ON u.id = s.user_id
+					WHERE
+					 rp.id = ?
+					<sql:param value="${gel_processInstanceId}"/>
+            </sql:query>
+            <core:set value="${dataloadRequestor.rows[0].resource_id}" var="dataloadRequestor"/>
+          </core:if>
+          <!-- Always use 'xogrequest' - the XOG handling code later assumes 'xogrequest' holds the XOG data -->
+          <gel:parse var="xogrequest">
+            <NikuDataBus>
+              <Header action="write" externalSource="OTHER" objectType="customObjectInstance" version="13"/>
+              <customObjectInstances objectCode="${file_loader_table_root}">
+                <instance instanceCode="${dataloadData.code}" objectCode="${file_loader_table_root}">
+                  <CustomInformation>
+                    <ColumnValue name="code">${dataloadData.code}</ColumnValue>
+                    <ColumnValue name="name">${dataloadData.name}</ColumnValue>
+                    <ColumnValue name="requestor">${dataloadRequestor}</ColumnValue>
+                  </CustomInformation>
+                </instance>
+              </customObjectInstances>
+            </NikuDataBus>
+          </gel:parse>
+          <!-- Set 'send_to_clarity' - if you don't the XOG handling code later will not be triggered -->
+          <!--core:set var="send_to_clarity" value="YES" /-->
+        </core:case>
+        <core:case value="xog_data_file">
+          <!-- TO-DO - need to get the Seach Index location for the document XOG location -->
+          <gel:parse var="xogrequest">
+            <NikuDataBus>
+              <Header action="read" externalSource="NIKU" objectType="customObjectInstance" version="13">
+                <args name="documentLocation" value="${tmpDir}"/>
+              </Header>
+              <CustomObjectInstanceQuery>
+                <Filter criteria="EQUALS" name="objectCode">${file_loader_table_root}</Filter>
+                <Filter criteria="EQUALS" name="instanceCode">${dataloadData.code}</Filter>
+              </CustomObjectInstanceQuery>
+            </NikuDataBus>
+          </gel:parse>
+          <core:if test="${not (runningOutsideProcess)}">
+            <core:set value="YES" var="use_direct_xog"/>
+          </core:if>
+        </core:case>
+        <core:case value="get_config">
+          <core:set value="no" var="send_to_clarity"/>
+          <!-- Get the Id of the config file associated with the dataload type. Use the default if no mapping supplied -->
+          <sql:query
+              var="getConfigID">
+				SELECT 
+				 NVL(m.${config_map_column}, x.config_file_id) config_file_id
+				FROM
+				(SELECT ? config_file_id FROM dual) x
+				 LEFT OUTER JOIN ${config_map_table} m ON m.code = ?
+				<sql:param value="${dataload_config_file}"/>
+            <sql:param value="${dataloadData.file_type}"/>
+          </sql:query>
+          <core:if test="${getConfigID.RowCount ne 1}">
+            <core:new className="java.lang.Exception" var="err">
+              <core:arg type="java.lang.String" value="Expecting 1 row of config map data, actually got ${getConfigID.RowCount}"/>
+            </core:new>
+            <core:break/>
+          </core:if>
+          <core:set value="${getConfigID.rows[0].config_file_id}" var="configID"/>
+          <core:set escapeText="false" value="Dataload config: ${configID}" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log>${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">
+              <core:choose>
+                <core:when test="${not empty(context.getVariable(configID))}">
+                  <core:set value="${context.getVariable(configID)}" var="configFilename"/>
+                </core:when>
+                <core:otherwise>
+                  <core:set value="${configID}" var="configFilename"/>
+                </core:otherwise>
+              </core:choose>
+              <gel:parse file="${configFilename}" var="configFile"/>
+            </core:when>
+            <core:otherwise>
+              <sql:query
+                  var="getConfigFile">
+					SELECT 
+					 ${config_column} AS config_file
+					FROM
+					 ${config_table}
+					WHERE
+					 code = ?
+					<sql:param value="${configID}"/>
+              </sql:query>
+              <core:if test="${getConfigFile.RowCount ne 1}">
+                <core:new className="java.lang.Exception" var="err">
+                  <core:arg type="java.lang.String" value="Expecting 1 row of config data for '${configID}' (${config_table}.${config_column}), actually got ${getConfigFile.RowCount}"/>
+                </core:new>
+                <core:break/>
+              </core:if>
+              <gel:parse file="${getConfigFile.rows[0].config_file.getAsciiStream()}" var="configFile"/>
+            </core:otherwise>
+          </core:choose>
+          <core:if test="${verbose_logs}">
+            <gel:set asString="true" select="$configFile" var="output"/>
+            <core:set escapeText="false" value="Dataload config details:&#xa;${output}" var="logMessage"/>
+            <core:choose>
+              <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                  <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                  <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                </core:if>
+                <gel:log var="logMessageList">${logMessage}</gel:log>
+              </core:when>
+              <core:otherwise>
+                <gel:log>${logMessage}</gel:log>
+              </core:otherwise>
+            </core:choose>
+          </core:if>
+          <gel:forEach select="$configFile/properties/dataloads/dataload" var="thisDataload">
+            <gel:set asString="true" select="$thisDataload/@id/text()" var="thisDataload"/>
+            <core:set var="dataloadLoops">${dataloadLoops},${thisDataload}</core:set>
+          </gel:forEach>
+          <core:set value="${dataloadLoops.substring(1)}" var="dataloadLoops"/>
+          <core:set escapeText="false" value="Dataloads to process: ${dataloadLoops}" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log>${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+        </core:case>
+        <core:case value="cache_stylesheets">
+          <core:set value="no" var="send_to_clarity"/>
+          <core:new className="java.util.Hashtable" var="allStylesheets"/>
+          <core:forEach items="${dataloadLoops}" var="thisDataload">
+            <gel:set asString="true" select="$configFile/properties/dataloads/dataload[./@id = $thisDataload]/@stylesheet/text()" var="stylesheetID"/>
+            <core:if test="${empty(allStylesheets.get(stylesheetID))}">
+              <core:set escapeText="false" value="Getting stylesheet: ${stylesheetID}" var="logMessage"/>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                  </core:if>
+                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                </core:when>
+                <core:otherwise>
+                  <gel:log>${logMessage}</gel:log>
+                </core:otherwise>
+              </core:choose>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">
+                  <core:choose>
+                    <core:when test="${not empty(context.getVariable(stylesheetID))}">
+                      <core:set value="${context.getVariable(stylesheetID)}" var="xslFilename"/>
+                    </core:when>
+                    <core:otherwise>
+                      <core:set value="${stylesheetID}" var="xslFilename"/>
+                    </core:otherwise>
+                  </core:choose>
+                  <gel:parse file="${xslFilename}" var="xslFile"/>
+                </core:when>
+                <core:otherwise>
+                  <sql:query
+                      var="getConfigFile">
+							SELECT 
+							 ${config_column} AS config_file
+							FROM
+							 ${config_table}
+							WHERE
+							 code = ?
+							<sql:param value="${stylesheetID}"/>
+                  </sql:query>
+                  <core:if test="${getConfigFile.RowCount ne 1}">
+                    <core:new className="java.lang.Exception" var="err">
+                      <core:arg type="java.lang.String" value="Expecting 1 row of stylesheet data for '${stylesheetID}' (${config_table}.${config_column}), actually got ${getConfigFile.RowCount}"/>
+                    </core:new>
+                    <core:break/>
+                  </core:if>
+                  <gel:parse file="${getConfigFile.rows[0].config_file.getAsciiStream()}" var="xslFile"/>
+                </core:otherwise>
+              </core:choose>
+              <core:set value="${allStylesheets.put(stylesheetID, xslFile)}" var="VOID"/>
+            </core:if>
+          </core:forEach>
+        </core:case>
+        <core:case value="cache_scripts">
+          <core:set value="no" var="send_to_clarity"/>
+          <core:new className="java.util.Hashtable" var="allScripts"/>
+          <core:forEach items="${dataloadLoops}" var="thisDataload">
+            <core:forEach items="${customScriptList}" var="thisScript">
+              <gel:set asString="true" select="$configFile/properties/dataloads/dataload[./@id = $thisDataload]/@*[name() = $thisScript]/text()" var="scriptID"/>
+              <core:if test="${not empty(scriptID)}">
+                <core:if test="${empty(allScripts.get(scriptID))}">
+                  <core:set escapeText="false" value="Getting script: ${scriptID}" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log>${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">
+                      <core:choose>
+                        <core:when test="${not empty(context.getVariable(scriptID))}">
+                          <core:set value="${context.getVariable(scriptID)}" var="thisFilename"/>
+                        </core:when>
+                        <core:otherwise>
+                          <core:set value="${scriptID}" var="thisFilename"/>
+                        </core:otherwise>
+                      </core:choose>
+                    </core:when>
+                    <core:otherwise>
+                      <sql:query
+                          var="getConfigFile">
+									SELECT 
+									 ${config_column} AS config_file
+									,last_updated_date last_updated_date
+									FROM
+									 ${config_table}
+									WHERE
+									 code = ?
+									<sql:param value="${scriptID}"/>
+                      </sql:query>
+                      <core:if test="${getConfigFile.RowCount ne 1}">
+                        <core:new className="java.lang.Exception" var="err">
+                          <core:arg type="java.lang.String" value="Expecting 1 row of script data for '${scriptID}' (${config_table}.${config_column}), actually got ${getConfigFile.RowCount}"/>
+                        </core:new>
+                        <core:break/>
+                      </core:if>
+                      <core:set value="${getConfigFile.rows[0]}" var="getConfigFile"/>
+                      <core:set value="${tmpDir}${scriptID}" var="thisFilename"/>
+                      <util:file name="${thisFilename}" var="thisFile"/>
+                      <core:set value="${0}" var="fileModified"/>
+                      <core:if test="${thisFile.exists()}">
+                        <core:set value="${thisFile.lastModified()}" var="fileModified"/>
+                      </core:if>
+                      <core:if test="${fileModified lt getConfigFile.last_updated_date.getTime()}">
+                        <gel:parse file="${getConfigFile.config_file.getAsciiStream()}" var="thisScript"/>
+                        <gel:serialize fileName="${thisFilename}" var="${thisScript}"/>
+                        <core:set value="Template file created: ${scriptID} (${thisFilename})" var="logMessage"/>
+                        <core:choose>
+                          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                            </core:if>
+                            <gel:log var="logMessageList">${logMessage}</gel:log>
+                          </core:when>
+                          <core:otherwise>
+                            <gel:log>${logMessage}</gel:log>
+                          </core:otherwise>
+                        </core:choose>
+                      </core:if>
+                    </core:otherwise>
+                  </core:choose>
+                  <core:set value="${allScripts.put(scriptID, thisFilename)}" var="VOID"/>
+                  <core:if test="${empty(parentContext)}">
+                    <core:set value="${context}" var="parentContext"/>
+                  </core:if>
+                </core:if>
+              </core:if>
+            </core:forEach>
+          </core:forEach>
+        </core:case>
+        <core:case value="do_dataloads">
+          <core:getStatic className="org.apache.poi.hssf.usermodel.HSSFCell" field="CELL_TYPE_NUMERIC" var="CELL_TYPE_NUMERIC"/>
+          <core:getStatic className="org.apache.poi.hssf.usermodel.HSSFCell" field="CELL_TYPE_BLANK" var="CELL_TYPE_BLANK"/>
+          <core:new className="java.util.Locale" var="LOCALE">
+            <core:arg type="java.lang.String" value="en"/>
+            <core:arg type="java.lang.String" value="US"/>
+          </core:new>
+          <core:new className="org.apache.poi.ss.usermodel.DataFormatter" var="formatter">
+            <core:arg type="java.util.Locale" value="${LOCALE}"/>
+          </core:new>
+          <core:invokeStatic className="java.text.NumberFormat" method="getInstance" var="numberFormatter">
+            <core:arg type="java.util.Locale" value="${LOCALE}"/>
+          </core:invokeStatic>
+          <core:invoke method="setMaximumFractionDigits" on="${numberFormatter}">
+            <core:arg type="int" value="${max_decimal_places}"/>
+          </core:invoke>
+          <core:set value="${dataloadLoops}" var="innerLoopItems"/>
+        </core:case>
+        <core:case value="run_post_load_scripts">
+          <core:set value="${dataloadLoops}" var="innerLoopItems"/>
+        </core:case>
+        <core:case value="update_status">
+          <!-- If we get here then no errors were reported OR error rows were ignored. If load_data was set to YES we can assume that the spreadsheet rows are loaded and we can padlock the master instance -->
+          <gel:parse var="xogrequest">
+            <NikuDataBus>
+              <Header action="write" externalSource="OTHER" objectType="customObjectInstance" version="13"/>
+              <customObjectInstances objectCode="${file_loader_table_root}">
+                <instance instanceCode="${dataloadData.code}" objectCode="${file_loader_table_root}">
+                  <CustomInformation>
+                    <ColumnValue name="code">${dataloadData.code}</ColumnValue>
+                    <ColumnValue name="name">${dataloadData.name}</ColumnValue>
+                    <core:choose>
+                      <core:when test="${dataloadData.load_data eq 'YES'}">
+                        <ColumnValue name="is_read_write">false</ColumnValue>
+                        <ColumnValue name="load_data">NO</ColumnValue>
+                        <core:choose>
+                          <core:when test="${rowErrorsIgnored gt 0}">
+                            <ColumnValue name="process_message">z_load_with_errors</ColumnValue>
+                          </core:when>
+                          <core:otherwise>
+                            <ColumnValue name="process_message">z_load_ok</ColumnValue>
+                          </core:otherwise>
+                        </core:choose>
+                      </core:when>
+                      <core:otherwise>
+                        <ColumnValue name="process_message">z_validation_ok</ColumnValue>
+                      </core:otherwise>
+                    </core:choose>
+                  </CustomInformation>
+                </instance>
+              </customObjectInstances>
+            </NikuDataBus>
+          </gel:parse>
+        </core:case>
+        <core:case value="log_out">
+          <!-- We should always logout to release the session -->
+          <core:if test="${not empty(thisSessionId)}">
+            <core:set value="no" var="use_direct_xog"/>
+            <core:set value="YES" var="send_to_clarity"/>
+            <gel:parse var="xogrequest">
+              <Logout xmlns="http://www.niku.com/xog"/>
+            </gel:parse>
+          </core:if>
+        </core:case>
+      </core:switch>
+      <!-- END OF SCRIPT PROCESSING LOGIC -->
+      <core:forEach items="${innerLoopItems}" var="loopItem">
+        <core:set value="${true}" var="forEver"/>
+        <core:if test="${verbose_logs.matches(devLogs)}">
+          <core:set escapeText="false" value="Inner loop item: ${loopItem}" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log>${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+        </core:if>
+        <core:remove var="loopDataRow"/>
+        <core:while test="${forEver}">
+          <core:set value="${false}" var="forEver"/>
+          <!-- Inner loop processing goes here -->
+          <core:switch on="${processStep}">
+            <core:case value="do_dataloads">
+              <core:remove var="xogrequest"/>
+              <core:remove var="xogrequestRaw"/>
+              <core:set value="no" var="send_to_clarity"/>
+              <core:if test="${empty(loopDataRow)}">
+                <core:set escapeText="false" value="Processing dataload: ${loopItem}" var="logMessage"/>
+                <core:choose>
+                  <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                      <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                      <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                    </core:if>
+                    <gel:log var="logMessageList">${logMessage}</gel:log>
+                  </core:when>
+                  <core:otherwise>
+                    <gel:log>${logMessage}</gel:log>
+                  </core:otherwise>
+                </core:choose>
+                <gel:set select="$configFile/properties/dataloads/dataload[./@id = $loopItem]" var="thisConfig"/>
+                <!--gel:set var="curveColumns" select="$thisConfig/dataProperty[./@name = 'CURVE_COLUMNS']/text()" asString="true" />
+						<core:set escapeText="false" var="curveColumns" value=",${curveColumns}," /-->
+                <!-- Process the data file config -->
+                <core:set value="||" var="DateAttributes"/>
+                <core:set value="||" var="MultiValueAttributes"/>
+                <core:forEach
+                  items="process_rows,language_code,worksheet,skip_rows,ignore_blank_rows,skip_error_rows,use_sql_insert,table_columns,truncate_table,table_name,column_map,column_names,column_aliases,required_columns,date_columns,number_columns,multi_value_columns" var="thisDataConfig">
+                  <core:set escapeText="false" value="Processing configuration for: ${thisDataConfig}" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log>${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                  <!-- Set any defaults -->
+                  <core:switch on="${thisDataConfig}">
+                    <core:case value="use_sql_insert">
+                      <core:set value="no" var="use_sql_insert"/>
+                    </core:case>
+                    <core:case value="truncate_table">
+                      <core:set value="no" var="truncate_table"/>
+                    </core:case>
+                    <core:case value="process_rows">
+                      <core:set value="YES" var="process_rows"/>
+                    </core:case>
+                    <core:case value="skip_rows">
+                      <core:set value="0" var="skip_rows"/>
+                    </core:case>
+                    <core:case value="ignore_blank_rows">
+                      <core:set value="no" var="ignore_blank_rows"/>
+                    </core:case>
+                    <core:case value="skip_error_rows">
+                      <core:set value="no" var="skip_error_rows"/>
+                    </core:case>
+                    <core:case value="required_columns">
+                      <core:set value="${column_names}" var="required_columns"/>
+                    </core:case>
+                    <core:default>
+                      <core:remove var="${thisDataConfig}"/>
+                    </core:default>
+                  </core:switch>
+                  <gel:set asString="true" select="$thisConfig/property[@name = $thisDataConfig]/text()" var="thisDataConfigItem"/>
+                  <core:if test="${not empty(thisDataConfigItem)}">
+                    <core:set value="${thisDataConfigItem}" var="${thisDataConfig}"/>
+                  </core:if>
+                  <!-- Perform post-setting processing -->
+                  <core:switch on="${thisDataConfig}">
+                    <!-- Over-ride worksheet name if set on instance -->
+                    <core:case value="language_code">
+                      <core:if test="${empty(language_code)}">
+                        <core:set value="en" var="language_code"/>
+                      </core:if>
+                    </core:case>
+                    <core:case value="worksheet">
+                      <core:if test="${not empty(dataloadData.worksheet_name)}">
+                        <core:set value="${dataloadData.worksheet_name}" var="worksheet"/>
+                      </core:if>
+                    </core:case>
+                    <core:case value="table_name">
+                      <core:if test="${not empty(table_name)}">
+                        <core:set value="${table_name.toLowerCase()}" var="table_name"/>
+                      </core:if>
+                    </core:case>
+                  </core:switch>
+                  <!-- Perform post-setting processing -->
+                  <core:switch on="${thisDataConfig}">
+                    <core:case value="column_map">
+                      <core:if test="${use_sql_insert}">
+                        <core:if test="${empty(column_map)}">
+                          <core:new className="java.lang.Exception" var="err">
+                            <core:arg type="java.lang.String" value="Must have 'column_map' if 'use_sql_insert' is specified"/>
+                          </core:new>
+                        </core:if>
+                      </core:if>
+                    </core:case>
+                    <core:case value="table_name">
+                      <core:if test="${use_sql_insert}">
+                        <core:choose>
+                          <core:when test="${empty(table_name)}">
+                            <core:new className="java.lang.Exception" var="err">
+                              <core:arg type="java.lang.String" value="Must have 'table_name' if 'use_sql_insert' is specified"/>
+                            </core:new>
+                          </core:when>
+                          <core:otherwise>
+                            <sql:query escapeText="false"
+                                var="tableExists">
+										SELECT
+										 'EXISTS'
+										FROM
+										 user_tables
+										WHERE
+										 LOWER(table_name) = ?
+										<sql:param value="${table_name}"/>
+                            </sql:query>
+                            <core:set value="${tableExists.RowCount}" var="tableExists"/>
+                            <core:if test="${tableExists gt 0}">
+                              <core:if test="${truncate_table}">
+                                <core:set escapeText="false" value="Truncating table '${table_name}'" var="logMessage"/>
+                                <core:choose>
+                                  <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                                      <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                                      <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                                    </core:if>
+                                    <gel:log var="logMessageList">${logMessage}</gel:log>
+                                  </core:when>
+                                  <core:otherwise>
+                                    <gel:log level="WARN">${logMessage}</gel:log>
+                                  </core:otherwise>
+                                </core:choose>
+                                <sql:update escapeText="false" var="VOID">
+												TRUNCATE TABLE ${table_name}										
+												</sql:update>
+                              </core:if>
+                              <core:if test="${DROP_TABLE}">
+                                <core:set escapeText="false" value="Dropping table '${table_name}'" var="logMessage"/>
+                                <core:choose>
+                                  <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                                      <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                                      <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                                    </core:if>
+                                    <gel:log var="logMessageList">${logMessage}</gel:log>
+                                  </core:when>
+                                  <core:otherwise>
+                                    <gel:log level="WARN">${logMessage}</gel:log>
+                                  </core:otherwise>
+                                </core:choose>
+                                <sql:update escapeText="false" var="VOID">
+												DROP TABLE ${table_name}										
+												</sql:update>
+                                <core:set value="${0}" var="tableExists"/>
+                              </core:if>
+                            </core:if>
+                            <core:if test="${tableExists eq 0}">
+                              <core:choose>
+                                <core:when test="${empty(table_columns)}">
+                                  <core:new className="java.lang.Exception" var="err">
+                                    <core:arg type="java.lang.String" value="Table '${table_name}' does not exist in database and 'table_columns' not specified"/>
+                                  </core:new>
+                                </core:when>
+                                <core:otherwise>
+                                  <core:forEach items="${table_columns}" var="thisCol">
+                                    <util:tokenize delim=":" var="thisCol">${thisCol}</util:tokenize>
+                                    <core:set escapeText="false" value="${allCols},${thisCol[0].toLowerCase()} ${thisCol[1].toUpperCase()}&#xa;" var="allCols"/>
+                                  </core:forEach>
+                                  <core:set escapeText="false" value="${allCols.substring(1)}" var="allCols"/>
+                                  <core:set escapeText="false" value="Creating table '${table_name}' as:&#xa; ${allCols}" var="logMessage"/>
+                                  <core:choose>
+                                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                                      </core:if>
+                                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                                    </core:when>
+                                    <core:otherwise>
+                                      <gel:log level="WARN">${logMessage}</gel:log>
+                                    </core:otherwise>
+                                  </core:choose>
+                                  <sql:update escapeText="false" var="tableExists">
+												CREATE TABLE ${table_name} (
+												 ${allCols}
+												)
+												</sql:update>
+                                </core:otherwise>
+                              </core:choose>
+                            </core:if>
+                          </core:otherwise>
+                        </core:choose>
+                      </core:if>
+                    </core:case>
+                    <core:case value="skip_rows">
+                      <core:invokeStatic className="java.lang.Integer" method="parseInt" var="skip_rows">
+                        <core:arg type="java.lang.String" value="${skip_rows}"/>
+                      </core:invokeStatic>
+                    </core:case>
+                    <core:case value="column_names">
+                      <core:if test="${process_rows}">
+                        <core:if test="${empty(column_names)}">
+                          <core:new className="java.lang.Exception" var="err">
+                            <core:arg type="java.lang.String" value="Cannot find column names for '${loopItem}'"/>
+                          </core:new>
+                        </core:if>
+                      </core:if>
+                    </core:case>
+                    <core:case value="date_columns">
+                      <util:replace newChar="|" oldChar="," value="|${date_columns}|" var="DateAttributes"/>
+                    </core:case>
+                    <core:case value="multi_value_columns">
+                      <util:replace newChar="|" oldChar="," value="|${multi_value_columns}|" var="MultiValueAttributes"/>
+                    </core:case>
+                  </core:switch>
+                  <core:if test="${not empty(context.getVariable(thisDataConfig))}">
+                    <core:set escapeText="false" value="Data configuration for '${thisDataConfig}' set to: ${context.getVariable(thisDataConfig)}" var="logMessage"/>
+                    <core:choose>
+                      <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                          <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                          <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                        </core:if>
+                        <gel:log var="logMessageList">${logMessage}</gel:log>
+                      </core:when>
+                      <core:otherwise>
+                        <gel:log>${logMessage}</gel:log>
+                      </core:otherwise>
+                    </core:choose>
+                  </core:if>
+                  <core:break test="${not empty(err)}"/>
+                </core:forEach>
+                <core:break test="${not empty(err)}"/>
+                <!-- END - Process the data file config -->
+                <!-- Cache the data file config -->
+                <core:forEach items="column_map,column_names,column_aliases,required_columns,date_columns,number_columns,multi_value_columns" var="thisConfigCache">
+                  <core:set value="${thisConfigCache}Cache" var="cacheName"/>
+                  <core:new className="java.util.Hashtable" var="${cacheName}"/>
+                  <core:set value="${context.getVariable(cacheName)}" var="thisCache"/>
+                  <core:forEach items="${context.getVariable(thisConfigCache)}" var="thisCacheValue">
+                    <core:choose>
+                      <core:when test="${thisConfigCache eq 'column_map'}">
+                        <util:tokenize delim=":" var="thisCacheValue">${thisCacheValue}</util:tokenize>
+                        <core:mute>${thisCache.put(thisCacheValue[0], thisCacheValue[1])}</core:mute>
+                      </core:when>
+                      <core:when test="${thisConfigCache eq 'column_aliases'}">
+                        <util:tokenize delim=":" var="thisCacheValue">${thisCacheValue}</util:tokenize>
+                        <core:mute>${thisCache.put(thisCacheValue[0], thisCacheValue[1])}</core:mute>
+                      </core:when>
+                      <core:otherwise>
+                        <core:mute>${thisCache.put(thisCacheValue, thisCacheValue)}</core:mute>
+                      </core:otherwise>
+                    </core:choose>
+                  </core:forEach>
+                  <core:set escapeText="false" value="Cache for '${thisConfigCache}' set to: ${context.getVariable(cacheName)}" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log>${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                </core:forEach>
+                <!-- Validate the data file cache -->
+                <core:set value="${0}" var="cacheErrors"/>
+                <core:forEach items="required_columns,date_columns,number_columns,multi_value_columns" var="thisConfigCache">
+                  <core:set value="${thisConfigCache}Cache" var="cacheName"/>
+                  <core:set value="${context.getVariable(cacheName)}" var="thisCache"/>
+                  <core:forEach items="${thisCache.keys()}" var="thisCacheValue">
+                    <core:if test="${empty(column_namesCache.get(thisCacheValue))}">
+                      <core:set value="${false}" var="columnFound"/>
+                      <core:forEach items="${column_aliasesCache.elements()}" var="thisAlias">
+                        <core:if test="${thisAlias eq thisCacheValue}">
+                          <core:set value="${true}" var="columnFound"/>
+                          <core:break/>
+                        </core:if>
+                      </core:forEach>
+                      <core:if test="${not columnFound}">
+                        <core:set escapeText="false"
+                          value="Column reference '${thisCacheValue}' is set for '${thisConfigCache}', but is not referenced in 'column_names'" var="logMessage"/>
+                        <core:choose>
+                          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                            </core:if>
+                            <gel:log var="logMessageList">${logMessage}</gel:log>
+                          </core:when>
+                          <core:otherwise>
+                            <gel:log level="WARN">${logMessage}</gel:log>
+                          </core:otherwise>
+                        </core:choose>
+                        <core:set value="${cacheErrors + 1}" var="cacheErrors"/>
+                      </core:if>
+                    </core:if>
+                  </core:forEach>
+                </core:forEach>
+                <core:if test="${cacheErrors gt 0}">
+                  <core:new className="java.lang.Exception" var="err">
+                    <core:arg type="java.lang.String" value="Errors found in data column configuration"/>
+                  </core:new>
+                  <core:break/>
+                </core:if>
+                <!-- Process the stylesheet -->
+                <core:if test="${use_sql_insert eq 'no'}">
+                  <gel:set asString="true" select="$thisConfig/@stylesheet/text()" var="stylesheetID"/>
+                  <core:if test="${empty(stylesheetID)}">
+                    <core:new className="java.lang.Exception" var="err">
+                      <core:arg type="java.lang.String" value="Cannot find stylesheet Id for '${loopItem}'"/>
+                    </core:new>
+                    <core:break/>
+                  </core:if>
+                  <core:set escapeText="false" value="Using stylesheet: ${stylesheetID}" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log>${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                  <core:set value="${allStylesheets.get(stylesheetID)}" var="thisXSLT"/>
+                  <gel:forEach select="$thisXSLT//xsl:variable" var="loopProperty">
+                    <gel:set asString="true" select="$loopProperty/@name/text()" var="loopPropertyName"/>
+                    <core:set value="${context.getVariable(loopPropertyName)}" var="xslVariable"/>
+                    <core:if test="${not empty(xslVariable)}">
+                      <core:if test="${verbose_logs.matches(devLogs)}">
+                        <core:set escapeText="false" value="Setting XSL variable: ${loopPropertyName} = ${xslVariable}" var="logMessage"/>
+                        <core:choose>
+                          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                            </core:if>
+                            <gel:log var="logMessageList">${logMessage}</gel:log>
+                          </core:when>
+                          <core:otherwise>
+                            <gel:log>${logMessage}</gel:log>
+                          </core:otherwise>
+                        </core:choose>
+                      </core:if>
+                      <gel:set select="$loopProperty/text()" var="xslVariableValue"/>
+                      <core:choose>
+                        <core:when test="${not empty(xslVariableValue)}">
+                          <gel:set select="$thisXSLT//xsl:variable[@name = $loopPropertyName]/text()" value="${xslVariable}"/>
+                        </core:when>
+                        <core:otherwise>
+                          <gel:set insert="true" select="$thisXSLT//xsl:variable[@name = $loopPropertyName]" value="${xslVariable}"/>
+                        </core:otherwise>
+                      </core:choose>
+                    </core:if>
+                  </gel:forEach>
+                  <gel:forEach select="$thisConfig/property" var="loopProperty">
+                    <gel:set asString="true" select="$loopProperty/@name/text()" var="loopPropertyName"/>
+                    <gel:set select="$thisXSLT//xsl:variable[./@name = $loopPropertyName]" var="xslVariable"/>
+                    <core:if test="${not empty(xslVariable)}">
+                      <gel:set asString="true" select="$loopProperty/text()" var="loopPropertyValue"/>
+                      <core:if test="${verbose_logs.matches(devLogs)}">
+                        <core:set escapeText="false" value="Setting XSL variable: ${loopPropertyName} = ${loopPropertyValue}" var="logMessage"/>
+                        <core:choose>
+                          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                            </core:if>
+                            <gel:log var="logMessageList">${logMessage}</gel:log>
+                          </core:when>
+                          <core:otherwise>
+                            <gel:log>${logMessage}</gel:log>
+                          </core:otherwise>
+                        </core:choose>
+                      </core:if>
+                      <gel:set select="$xslVariable/text()" var="xslVariableValue"/>
+                      <core:choose>
+                        <core:when test="${not empty(xslVariableValue)}">
+                          <gel:set select="$thisXSLT//xsl:variable[@name = $loopPropertyName]/text()" value="${loopPropertyValue}"/>
+                        </core:when>
+                        <core:otherwise>
+                          <gel:set insert="true" select="$thisXSLT//xsl:variable[@name = $loopPropertyName]" value="${loopPropertyValue}"/>
+                        </core:otherwise>
+                      </core:choose>
+                    </core:if>
+                  </gel:forEach>
+                  <core:if test="${(verbose_logs eq 'YES') and (runningOutsideProcess)}">
+                    <gel:serialize fileName="${loopItem}-modified.xsl" var="${thisXSLT}"/>
+                  </core:if>
+                  <x:parse var="thisXSLT">
+                    <gel:include select="$thisXSLT/*"/>
+                  </x:parse>
+                </core:if>
+                <!-- END - Process the stylesheet -->
+                <!-- Process the (optional) pre-load, post-row and post-load script -->
+                <core:forEach items="${customScriptList}" var="thisScript">
+                  <core:remove var="${thisScript}"/>
+                  <gel:set asString="true" select="$thisConfig/@*[name() = $thisScript]/text()" var="scriptID"/>
+                  <core:if test="${not empty(scriptID)}">
+                    <core:set value="${allScripts.get(scriptID)}" var="${thisScript}"/>
+                    <core:set escapeText="false" value="Script '${thisScript}': ${scriptID}" var="logMessage"/>
+                    <core:choose>
+                      <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                          <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                          <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                        </core:if>
+                        <gel:log var="logMessageList">${logMessage}</gel:log>
+                      </core:when>
+                      <core:otherwise>
+                        <gel:log>${logMessage}</gel:log>
+                      </core:otherwise>
+                    </core:choose>
+                  </core:if>
+                </core:forEach>
+                <!-- END - Process the (optional) pre-load, post-row and post-load script -->
+                <!-- Find the Worksheet we want -->
+                <core:set value="${thisWorkbook.getNumberOfSheets()}" var="sheetCount"/>
+                <core:remove var="requiredSheet"/>
+                <core:forEach begin="${0}" end="${sheetCount - 1}" indexVar="s">
+                  <core:set value="${thisWorkbook.getSheetName(s)}" var="thisWorksheetName"/>
+                  <core:set value="Processing worksheet(${s + 1}): ${thisWorksheetName}" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log>${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                  <core:choose>
+                    <!-- This will break on the first Worksheet if the declared 'worksheet' is null -->
+                    <core:when test="${empty(worksheet)}">
+                      <core:set value="${s}" var="requiredSheet"/>
+                      <core:break/>
+                    </core:when>
+                    <core:when test="${thisWorksheetName eq worksheet}">
+                      <core:set value="${s}" var="requiredSheet"/>
+                      <core:break/>
+                    </core:when>
+                  </core:choose>
+                </core:forEach>
+                <core:choose>
+                  <core:when test="${empty(requiredSheet)}">
+                    <core:new className="java.lang.Exception" var="err">
+                      <core:arg type="java.lang.String" value="Cannot find worksheet: '${worksheet}'"/>
+                    </core:new>
+                    <core:break/>
+                  </core:when>
+                  <core:otherwise>
+                    <core:set value="${thisWorkbook.getSheetAt(requiredSheet)}" var="thisWorksheet"/>
+                    <core:set value="${thisWorksheet.getSheetName()}" var="thisWorksheetName"/>
+                    <core:set value="Worksheet(${requiredSheet + 1}): ${thisWorksheetName}" var="logMessage"/>
+                    <core:choose>
+                      <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                          <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                          <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                        </core:if>
+                        <gel:log var="logMessageList">${logMessage}</gel:log>
+                      </core:when>
+                      <core:otherwise>
+                        <gel:log>${logMessage}</gel:log>
+                      </core:otherwise>
+                    </core:choose>
+                  </core:otherwise>
+                </core:choose>
+                <!-- Get the column names and test them against 'column_names' -->
+                <core:set value="${skip_rows}" var="loopDataRow"/>
+                <core:if test="${process_rows}">
+                  <core:set value="${thisWorksheet.getLastRowNum()}" var="lastRow"/>
+                  <core:invoke method="getRow" on="${thisWorksheet}" var="thisRow">
+                    <core:arg type="int" value="${loopDataRow}"/>
+                  </core:invoke>
+                  <core:new className="java.util.Vector" var="columnNames"/>
+                  <core:new className="java.util.Hashtable" var="columnNamesCache"/>
+                  <core:set value="${thisRow.getFirstCellNum()}" var="firstCell"/>
+                  <core:set value="${thisRow.getLastCellNum()}" var="lastCell"/>
+                  <core:forEach begin="${firstCell}" end="${lastCell}" indexVar="cell">
+                    <core:set var="excelColumn">${cell + 1}</core:set>
+                    <core:choose>
+                      <core:when test="${not empty(column_aliasesCache.get(excelColumn))}">
+                        <core:set value="${column_aliasesCache.get(excelColumn)}" var="columnName"/>
+                      </core:when>
+                      <core:otherwise>
+                        <core:set value="${thisRow.getCell(cell)}" var="columnName"/>
+                        <core:set value="${formatter.formatCellValue(columnName)}" var="columnName"/>
+                      </core:otherwise>
+                    </core:choose>
+                    <core:if test="${empty(columnName)}">
+                      <core:set value="${cell - 1}" var="lastCell"/>
+                      <core:set value="Column header for column ${cell + 1} is empty. All data after this column will be ignored" var="logMessage"/>
+                      <core:choose>
+                        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                          </core:if>
+                          <gel:log var="logMessageList">${logMessage}</gel:log>
+                        </core:when>
+                        <core:otherwise>
+                          <gel:log>${logMessage}</gel:log>
+                        </core:otherwise>
+                      </core:choose>
+                      <core:break/>
+                    </core:if>
+                    <core:set value="${columnNames.add(columnName)}" var="VOID"/>
+                    <core:set value="${columnNamesCache.put(columnName, cell)}" var="VOID"/>
+                    <!-- TO-DO - Fix the cell offset issue -->
+                    <core:set value="Column(${cell + 1}): ${columnNames[cell]}" var="logMessage"/>
+                    <core:choose>
+                      <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                          <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                          <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                        </core:if>
+                        <gel:log var="logMessageList">${logMessage}</gel:log>
+                      </core:when>
+                      <core:otherwise>
+                        <gel:log>${logMessage}</gel:log>
+                      </core:otherwise>
+                    </core:choose>
+                  </core:forEach>
+                  <!-- Verify that the columns we want actually exist -->
+                  <core:set value="${0}" var="cacheErrors"/>
+                  <core:forEach items="${column_namesCache.keys()}" var="expectedCol">
+                    <core:if test="${empty(columnNamesCache.get(expectedCol))}">
+                      <core:set escapeText="false" value="Expected column '${expectedCol}' cannot be found" var="logMessage"/>
+                      <core:choose>
+                        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                          </core:if>
+                          <gel:log var="logMessageList">${logMessage}</gel:log>
+                        </core:when>
+                        <core:otherwise>
+                          <gel:log level="WARN">${logMessage}</gel:log>
+                        </core:otherwise>
+                      </core:choose>
+                      <core:set value="${cacheErrors + 1}" var="cacheErrors"/>
+                    </core:if>
+                  </core:forEach>
+                  <core:if test="${cacheErrors gt 0}">
+                    <core:new className="java.lang.Exception" var="err">
+                      <core:arg type="java.lang.String" value="Errors found in spreadsheet column configuration"/>
+                    </core:new>
+                    <core:break/>
+                  </core:if>
+                  <core:set value="${loopDataRow + 1}" var="loopDataRow"/>
+                </core:if>
+              </core:if>
+              <core:set value="${0}" var="rowErrors"/>
+              <core:set value="${0}" var="rowErrorsIgnored"/>
+              <!-- Call pre-load script if declared -->
+              <!-- At this point the following variables are available:
+						language_code - 2 character language code; can be used in SQL validations to e.g. match the lookup i18n caption
+						loopItem - the 'id' of the dataload being processed
+						thisConfig -  the current 'dataload' element from the config document - enables validation rules to be read by the called script
+						thisWorksheet - a handle to the current worksheet
+						thisWorksheetName - the name of the current worksheet
+						rowErrors - increment this to indicate errors and to stop the XOGing of the data file
+					-->
+              <core:if test="${not empty(pre_load_script)}">
+                <core:if test="${verbose_logs.matches(devLogs)}">
+                  <core:set escapeText="false" value="Running 'pre_load_script': ${pre_load_script}" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">
+                      <gel:out>${logMessage}</gel:out>
+                      <core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log>${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                </core:if>
+                <core:include file="${pre_load_script}"/>
+              </core:if>
+              <core:if test="${(process_rows eq 'YES') and (rowErrors eq 0)}">
+                <core:new className="java.util.Vector" var="validationMessages"/>
+                <x:parse var="xogrequestRaw">
+                  <Rows>
+                    <core:while test="${loopDataRow le lastRow}">
+                      <core:set value="${loopDataRow + 1}" var="thisRowNumber"/>
+                      <core:set value="${0}" var="colErrors"/>
+                      <core:set value="${0}" var="colDataCount"/>
+                      <core:if test="${empty(thisRowData)}">
+                        <core:new className="java.util.Hashtable" var="thisRowData"/>
+                      </core:if>
+                      <core:mute>${thisRowData.clear()}</core:mute>
+                      <core:if test="${not empty(additionalRowData)}">
+                        <core:forEach items="${additionalRowData.keys()}" var="additionalCellName">
+                          <core:set value="${additionalRowData.get(additionalCellName)}" var="additionalCellValue"/>
+                          <core:mute>${thisRowData.put(additionalCellName, additionalCellValue)}</core:mute>
+                        </core:forEach>
+                      </core:if>
+                      <!-- Get the next spreadsheet row -->
+                      <core:invoke method="getRow" on="${thisWorksheet}" var="thisRow">
+                        <core:arg type="int" value="${loopDataRow}"/>
+                      </core:invoke>
+                      <!-- v06 - Call pre_row_script if declared -->
+                      <!-- At this point the following variables are available:
+									loopItem - the 'id' of the dataload being processed
+									thisConfig -  the current 'dataload' element from the config document - enables validation rules to be read by the called script
+									thisRowData - a Hashtable holding the column name / column value pairs for the current row
+									thisRowNumber - an integer holding the (1-based) row being processed
+									columnNamesCache - a Hashtable holding a column name to cell number map
+									colErrors - increment this to indicate errors and to stop the XOGing of the data file
+								-->
+                      <core:if test="${not empty(pre_row_script)}">
+                        <core:if test="${verbose_logs.matches(devLogs)}">
+                          <core:set escapeText="false" value="Running 'pre_row_script': ${pre_row_script}" var="logMessage"/>
+                          <core:choose>
+                            <core:when test="${runningOutsideProcess}">
+                              <gel:out>${logMessage}</gel:out>
+                              <core:if test="${timestamp_log}">
+                                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                              </core:if>
+                              <gel:log var="logMessageList">${logMessage}</gel:log>
+                            </core:when>
+                            <core:otherwise>
+                              <gel:log>${logMessage}</gel:log>
+                            </core:otherwise>
+                          </core:choose>
+                        </core:if>
+                        <core:include file="${pre_row_script}"/>
+                      </core:if>
+                      <core:set value="${false}" var="forEver"/>
+                      <core:set escapeText="false" value="Processing row: ${loopDataRow + 1}" var="logMessage"/>
+                      <core:choose>
+                        <core:when test="${runningOutsideProcess}">
+                          <gel:out>${logMessage}</gel:out>
+                          <core:if test="${timestamp_log}">
+                            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                          </core:if>
+                          <gel:log var="logMessageList">${logMessage}</gel:log>
+                        </core:when>
+                        <core:otherwise>
+                          <gel:log>${logMessage}</gel:log>
+                        </core:otherwise>
+                      </core:choose>
+                      <core:mute>${validationMessages.clear()}</core:mute>
+                      <core:forEach begin="${firstCell}" end="${lastCell}" indexVar="cell">
+                        <core:set value="${false}" var="cellError"/>
+                        <core:set value="${thisRow.getCell(cell)}" var="thisCell"/>
+                        <core:set value="${thisCell.getCellType()}" var="cellType"/>
+                        <core:set value="${cell - firstCell}" var="cellOffset"/>
+                        <core:set value="${columnNames[cellOffset]}" var="cellName"/>
+                        <core:set value="${false}" var="isCellDateFormatted"/>
+                        <core:set value="${formatter.formatCellValue(thisCell)}" var="cellValue"/>
+                        <core:if test="${not empty(cellValue)}">
+                          <core:set value="${number_columnsCache.get(cellName)}" var="IS_CELL_NUMBER"/>
+                          <core:set value="${date_columnsCache.get(cellName)}" var="IS_CELL_DATE"/>
+                          <core:if test="${cellType eq CELL_TYPE_NUMERIC}">
+                            <core:invokeStatic className="org.apache.poi.ss.usermodel.DateUtil" method="isCellDateFormatted" var="isCellDateFormatted">
+                              <core:arg type="org.apache.poi.ss.usermodel.Cell" value="${thisCell}"/>
+                            </core:invokeStatic>
+                          </core:if>
+                          <core:if test="${(not empty(IS_CELL_NUMBER)) and (cellType ne CELL_TYPE_NUMERIC)}">
+                            <core:set escapeText="false"
+                              value="Row: ${loopDataRow + 1}, Column: ${cellName} - Column is declared to be a number but the cell does not appear to hold a number" var="logMessage"/>
+                            <core:choose>
+                              <core:when test="${runningOutsideProcess}">
+                                <gel:out>${logMessage}</gel:out>
+                                <core:if test="${timestamp_log}">
+                                  <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                                  <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                                </core:if>
+                                <gel:log var="logMessageList">${logMessage}</gel:log>
+                              </core:when>
+                              <core:otherwise>
+                                <gel:log level="WARN">${logMessage}</gel:log>
+                              </core:otherwise>
+                            </core:choose>
+                            <core:set value="${colErrors + 1}" var="colErrors"/>
+                            <core:set value="${true}" var="cellError"/>
+                          </core:if>
+                          <core:if test="${not empty(IS_CELL_DATE)}">
+                            <core:if test="${(cellType ne CELL_TYPE_NUMERIC) or (not (isCellDateFormatted))}">
+                              <core:set escapeText="false"
+                                value="Row: ${loopDataRow + 1}, Column: ${cellName} - Column is declared to be a date but the cell does not appear to hold a date" var="logMessage"/>
+                              <core:choose>
+                                <core:when test="${runningOutsideProcess}">
+                                  <gel:out>${logMessage}</gel:out>
+                                  <core:if test="${timestamp_log}">
+                                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                                  </core:if>
+                                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                                </core:when>
+                                <core:otherwise>
+                                  <gel:log level="WARN">${logMessage}</gel:log>
+                                </core:otherwise>
+                              </core:choose>
+                              <core:set value="${colErrors + 1}" var="colErrors"/>
+                              <core:set value="${true}" var="cellError"/>
+                            </core:if>
+                          </core:if>
+                        </core:if>
+                        <core:if test="${not cellError}">
+                          <core:choose>
+                            <!-- Is the cell value a number (numbers and dates are CELL_TYPE_NUMERIC in Excel) -->
+                            <core:when test="${cellType eq CELL_TYPE_NUMERIC}">
+                              <core:choose>
+                                <core:when test="${isCellDateFormatted}">
+                                  <core:set value="${thisCell.getNumericCellValue()}" var="dateValue"/>
+                                  <core:invokeStatic className="org.apache.poi.ss.usermodel.DateUtil" method="getJavaDate" var="javaDate">
+                                    <core:arg type="double" value="${dateValue}"/>
+                                  </core:invokeStatic>
+                                  <core:choose>
+                                    <core:when test="${dateValue lt 1}">
+                                      <!-- It's just a time -->
+                                      <core:set var="cellValue">
+                                        <gel:formatDate dateVar="javaDate" format="HH:mm:ss"/>
+                                      </core:set>
+                                    </core:when>
+                                    <core:when test="${(dateValue mod 1) ne 0}">
+                                      <!-- It's a date/time -->
+                                      <core:set var="cellValue">
+                                        <gel:formatDate dateVar="javaDate" format="yyyy-MM-dd'T'HH:mm:ss"/>
+                                      </core:set>
+                                    </core:when>
+                                    <core:otherwise>
+                                      <!-- It's just a date -->
+                                      <core:set var="cellValue">
+                                        <gel:formatDate dateVar="javaDate" format="yyyy-MM-dd"/>
+                                      </core:set>
+                                    </core:otherwise>
+                                  </core:choose>
+                                </core:when>
+                                <core:otherwise>
+                                  <!--core:set var="cellValue" value="${formatter.formatCellValue(thisCell)}" /-->
+                                  <core:invoke method="getNumericCellValue" on="${thisCell}" var="cellValue"/>
+                                  <core:invoke method="format" on="${numberFormatter}" var="cellValue">
+                                    <core:arg type="double" value="${cellValue}"/>
+                                  </core:invoke>
+                                  <core:set value="${cellValue.replace(',', '')}" var="cellValue"/>
+                                </core:otherwise>
+                              </core:choose>
+                            </core:when>
+                            <core:when test="${empty(cellType)}">
+                              <!-- Remove the 'cellValue' as we have inherited it from a prior loop -->
+                              <core:remove var="cellValue"/>
+                            </core:when>
+                            <core:otherwise>
+                              <core:set value="${formatter.formatCellValue(thisCell)}" var="cellValue"/>
+                            </core:otherwise>
+                          </core:choose>
+                        </core:if>
+                        <core:set value="${required_columnsCache.get(cellName)}" var="IS_CELL_REQUIRED"/>
+                        <core:set value="${cellValue.trim()}" var="cellValue"/>
+                        <core:choose>
+                          <core:when test="${not empty(cellValue)}">
+                            <core:mute>${thisRowData.put(cellName, cellValue)}</core:mute>
+                            <core:set value="${colDataCount + 1}" var="colDataCount"/>
+                          </core:when>
+                          <core:when test="${(empty(cellValue)) and (not empty(IS_CELL_REQUIRED))}">
+                            <core:set escapeText="false"
+                              value="Row: ${loopDataRow + 1}, Column: ${cellName} - Column is declared as required but the cell does not appear to hold any data" var="logMessage"/>
+                            <core:mute>${validationMessages.add(logMessage)}</core:mute>
+                            <core:set value="${colErrors + 1}" var="colErrors"/>
+                          </core:when>
+                        </core:choose>
+                      </core:forEach>
+                      <core:if test="${colErrors eq 0}">
+                        <!-- Call post-row script if declared -->
+                        <!-- At this point the following variables are available:
+										loopItem - the 'id' of the dataload being processed
+										thisConfig -  the current 'dataload' element from the config document - enables validation rules to be read by the called script
+										thisRowData - a Hashtable holding the column name / column value pairs for the current row
+										thisRowNumber - an integer holding the (1-based) row being processed
+										colErrors - increment this to indicate errors and to stop the XOGing of the data file
+									-->
+                        <core:if test="${not empty(post_row_script)}">
+                          <core:set value="${loopDataRow + 1}" var="thisRowNumber"/>
+                          <core:if test="${verbose_logs.matches(devLogs)}">
+                            <core:set escapeText="false" value="Running 'post_row_script': ${post_row_script}" var="logMessage"/>
+                            <core:choose>
+                              <core:when test="${runningOutsideProcess}">
+                                <gel:out>${logMessage}</gel:out>
+                                <core:if test="${timestamp_log}">
+                                  <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                                  <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                                </core:if>
+                                <gel:log var="logMessageList">${logMessage}</gel:log>
+                              </core:when>
+                              <core:otherwise>
+                                <gel:log>${logMessage}</gel:log>
+                              </core:otherwise>
+                            </core:choose>
+                          </core:if>
+                          <core:include file="${post_row_script}"/>
+                          <core:break test="${not empty(err)}"/>
+                        </core:if>
+                      </core:if>
+                      <core:choose>
+                        <core:when test="${colDataCount eq 0 and ignore_blank_rows eq 'YES'}">
+                          <core:set escapeText="false" value="Row ${loopDataRow + 1} is blank" var="logMessage"/>
+                          <core:choose>
+                            <core:when test="${runningOutsideProcess}">
+                              <gel:out>${logMessage}</gel:out>
+                              <core:if test="${timestamp_log}">
+                                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                              </core:if>
+                              <gel:log var="logMessageList">${logMessage}</gel:log>
+                            </core:when>
+                            <core:otherwise>
+                              <gel:log level="WARN">${logMessage}</gel:log>
+                            </core:otherwise>
+                          </core:choose>
+                        </core:when>
+                        <core:when test="${colErrors gt 0}">
+                          <core:if test="${not empty(validationMessages)}">
+                            <core:forEach items="${validationMessages.elements()}" var="logMessage">
+                              <core:choose>
+                                <core:when test="${runningOutsideProcess}">
+                                  <gel:out>${logMessage}</gel:out>
+                                  <core:if test="${timestamp_log}">
+                                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                                  </core:if>
+                                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                                </core:when>
+                                <core:otherwise>
+                                  <gel:log level="WARN">${logMessage}</gel:log>
+                                </core:otherwise>
+                              </core:choose>
+                            </core:forEach>
+                          </core:if>
+                          <core:set value="${rowErrors + 1}" var="rowErrors"/>
+                          <core:if test="${(skip_error_rows eq 'YES') and (dataloadData.load_data eq 'YES')}">
+                            <core:set value="${rowErrorsIgnored + 1}" var="rowErrorsIgnored"/>
+                          </core:if>
+                        </core:when>
+                        <core:otherwise>
+                          <x:element escapeText="false" name="Row">
+                            <core:forEach escapeText="false" items="${thisRowData.keys()}" var="cellName">
+                              <x:element escapeText="false" name="Column">
+                                <x:attribute escapeText="false" name="name">${cellName}</x:attribute>${thisRowData.get(cellName)}</x:element>
+                            </core:forEach>
+                          </x:element>
+                        </core:otherwise>
+                      </core:choose>
+                      <core:set value="${loopDataRow + 1}" var="loopDataRow"/>
+                    </core:while>
+                  </Rows>
+                </x:parse>
+              </core:if>
+              <core:if test="${(rowErrors gt 0) and (rowErrorsIgnored eq 0)}">
+                <core:new className="java.lang.Exception" var="err">
+                  <core:arg type="java.lang.String" value="Errors found in spreadsheet data"/>
+                </core:new>
+                <core:break/>
+              </core:if>
+              <core:if test="${not empty(xogrequestRaw)}">
+                <core:if test="${runningOutsideProcess}">
+                  <core:file escapeText="false" name="${scriptName}-raw.xml" omitXmlDeclaration="true">${xogrequestRaw.asXML()}</core:file>
+                </core:if>
+                <core:choose>
+                  <core:when test="${use_sql_insert}">
+                    <core:new className="java.util.Vector" var="insertColNames"/>
+                    <util:tokenize delim="," var="column_map">${column_map}</util:tokenize>
+                    <core:forEach items="${column_map}" var="thisCol">
+                      <util:tokenize delim=":" var="thisCol">${thisCol}</util:tokenize>
+                      <core:if test="${empty(thisCol[1])}">
+                        <util:tokenize delim=":" var="thisCol">${thisCol[0]}:${thisCol[0]}</util:tokenize>
+                      </core:if>
+                      <core:mute>${insertColNames.add(thisCol)}</core:mute>
+                    </core:forEach>
+                    <core:set escapeText="false" var="insertStatement">
+							INSERT INTO ${table_name} (
+							<core:forEach indexVar="i"
+                        items="${insertColNames}" var="thisCol">
+                        <core:if test="${i gt 0}">,</core:if>${thisCol[1]}
+							</core:forEach>
+							)
+							VALUES (
+							<core:forEach
+                        indexVar="i" items="${insertColNames}" var="thisCol">
+                        <sql:query
+                            var="dateCol">
+								SELECT
+								 'EXISTS'
+								FROM
+								 user_tab_columns
+								WHERE
+								 LOWER(table_name) = ?
+								 AND LOWER(column_name) = ?
+								 AND LOWER(data_type) = 'date'
+								<sql:param value="${table_name}"/>
+                          <sql:param value="${thisCol[1]}"/>
+                        </sql:query>
+                        <core:set value="?" var="placeHolder"/>
+                        <core:if test="${dateCol.RowCount gt 0}">
+                          <core:set value="TO_DATE(${placeHolder}, 'YYYY-MM-DD')" var="placeHolder"/>
+                        </core:if>
+                        <core:if test="${i gt 0}">,</core:if>${placeHolder}
+							</core:forEach>
+							)
+							</core:set>
+                    <core:invoke method="getConnection" on="${org.apache.commons.jelly.sql.DataSource}" var="connection"/>
+                    <core:invoke method="prepareStatement" on="${connection}" var="statement">
+                      <core:arg type="java.lang.String" value="${insertStatement}"/>
+                    </core:invoke>
+                    <x:parse var="thisXSLT">
+                      <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+                        <xsl:output method="xml"/>
+                        <xsl:template match="node()|@*">
+                          <xsl:copy>
+                            <xsl:apply-templates select="@*|node()"/>
+                          </xsl:copy>
+                        </xsl:template>
+                      </xsl:stylesheet>
+                    </x:parse>
+                    <gel:parse escapeText="false" var="xogrequestRaw">
+                      <x:transform xml="${xogrequestRaw}" xslt="${thisXSLT}"/>
+                    </gel:parse>
+                    <core:set value="${0}" var="rowCount"/>
+                    <gel:forEach select="$xogrequestRaw//Row" var="thisRow">
+                      <core:set value="${rowCount + 1}" var="rowCount"/>
+                      <core:forEach indexVar="i" items="${insertColNames}" var="thisCol">
+                        <core:set value="${thisCol[0]}" var="colName"/>
+                        <gel:set asString="true" select="$thisRow/Column[@name = $colName]/text()" var="thisValue"/>
+                        <core:if test="${empty(thisValue)}">
+                          <core:set value="${null}" var="thisValue"/>
+                        </core:if>
+                        <core:invoke method="setString" on="${statement}">
+                          <core:arg type="int" value="${i + 1}"/>
+                          <core:arg type="java.lang.String" value="${thisValue}"/>
+                        </core:invoke>
+                      </core:forEach>
+                      <core:invoke method="addBatch" on="${statement}"/>
+                      <core:if test="${(rowCount mod 50) eq 0}">
+                        <core:invoke method="executeBatch" on="${statement}"/>
+                      </core:if>
+                    </gel:forEach>
+                    <core:invoke method="executeBatch" on="${statement}"/>
+                  </core:when>
+                  <core:otherwise>
+                    <gel:parse var="xogrequest">
+                      <x:transform xml="${xogrequestRaw}" xslt="${thisXSLT}"/>
+                    </gel:parse>
+                    <core:if test="${runningOutsideProcess}">
+                      <gel:serialize fileName="${scriptName}-transform.xml" var="${xogrequest}"/>
+                    </core:if>
+                    <core:if test="${not empty(xogrequest)}">
+                      <core:if test="${dataloadData.load_data eq 'YES'}">
+                        <core:set value="${paramSendToClarity}" var="send_to_clarity"/>
+                      </core:if>
+                    </core:if>
+                  </core:otherwise>
+                </core:choose>
+              </core:if>
+            </core:case>
+            <core:case value="run_post_load_scripts">
+              <!-- If we get this far then the spreadsheet data has been  loaded - we can now run any declared post-load script -->
+              <!-- Allow the included script to decide whether to 'send_to_clarity' -->
+              <core:set escapeText="false" value="Processing dataload: ${loopItem}" var="logMessage"/>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                  </core:if>
+                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                </core:when>
+                <core:otherwise>
+                  <gel:log>${logMessage}</gel:log>
+                </core:otherwise>
+              </core:choose>
+              <core:set value="no" var="send_to_clarity"/>
+              <core:remove var="xogrequest"/>
+              <gel:set select="$configFile/properties/dataloads/dataload[./@id = $loopItem]" var="thisConfig"/>
+              <!-- Process the (optional) post-load script -->
+              <core:forEach items="post_load_script" var="thisScript">
+                <core:remove var="${thisScript}"/>
+                <gel:set asString="true" select="$thisConfig/@*[name() = $thisScript]/text()" var="scriptID"/>
+                <core:if test="${not empty(scriptID)}">
+                  <core:set value="${allScripts.get(scriptID)}" var="${thisScript}"/>
+                  <!-- Call post-load script if declared -->
+                  <!-- At this point the following variables are available:
+								language_code - 2 character language code; can be used in SQL validations to e.g. match the lookup i18n caption
+								loopItem - the 'id' of the dataload being processed
+								thisConfig -  the current 'dataload' element from the config document - enables validation rules to be read by the called script
+								dataloadData - the 'row' of data from Clarity holding the parent File Loader instance
+							-->
+                  <core:if test="${not empty(post_load_script)}">
+                    <core:if test="${verbose_logs.matches(devLogs)}">
+                      <core:set escapeText="false" value="Running 'post_load_script': ${post_load_script}" var="logMessage"/>
+                      <core:choose>
+                        <core:when test="${runningOutsideProcess}">
+                          <gel:out>${logMessage}</gel:out>
+                          <core:if test="${timestamp_log}">
+                            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                          </core:if>
+                          <gel:log var="logMessageList">${logMessage}</gel:log>
+                        </core:when>
+                        <core:otherwise>
+                          <gel:log>${logMessage}</gel:log>
+                        </core:otherwise>
+                      </core:choose>
+                    </core:if>
+                    <core:include file="${post_load_script}"/>
+                  </core:if>
+                </core:if>
+              </core:forEach>
+              <!-- END - Process the (optional) post-load script -->
+            </core:case>
+            <core:default>
+              <core:set value="${false}" var="forEver"/>
+            </core:default>
+          </core:switch>
+          <core:if test="${not empty(xogrequest) and verbose_logs eq 'YES'}">
+            <core:if test="${not empty(xogrequestRaw)}">
+              <core:set escapeText="false" value="Raw request:&#xa;${xogrequestRaw.asXML()}" var="logMessage"/>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                  </core:if>
+                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                </core:when>
+                <core:otherwise>
+                  <gel:log>${logMessage}</gel:log>
+                </core:otherwise>
+              </core:choose>
+            </core:if>
+            <gel:set asString="true" select="$xogrequest" var="output"/>
+            <core:set escapeText="false" value="XOG Request:&#xa;${output}" var="logMessage"/>
+            <core:choose>
+              <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                  <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                  <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                </core:if>
+                <gel:log var="logMessageList">${logMessage}</gel:log>
+              </core:when>
+              <core:otherwise>
+                <gel:log>${logMessage}</gel:log>
+              </core:otherwise>
+            </core:choose>
+          </core:if>
+          <!-- Now call XOG if required -->
+          <core:if test="${send_to_clarity}">
+            <core:choose>
+              <core:when test="${use_direct_xog}">
+                <core:if test="${empty(XOGClientInterface)}">
+                  <core:new className="com.niku.xog.client.XOGClientInterface" var="XOGClientInterface"/>
+                  <core:new className="com.niku.xog.client.XOGAdminClient" var="XOGAdminClient"/>
+                </core:if>
+                <core:choose>
+                  <core:when test="${empty(thisSessionId)}">
+                    <core:set escapeText="false" value="Using direct XOG with User ID" var="logMessage"/>
+                    <core:choose>
+                      <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                          <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                          <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                        </core:if>
+                        <gel:log var="logMessageList">${logMessage}</gel:log>
+                      </core:when>
+                      <core:otherwise>
+                        <gel:log>${logMessage}</gel:log>
+                      </core:otherwise>
+                    </core:choose>
+                    <core:invoke method="invoke" on="${XOGClientInterface}" var="xogresponse">
+                      <core:arg type="java.lang.String" value="${xog_user}"/>
+                      <core:arg type="org.w3c.dom.Document" value="${xogrequest}"/>
+                    </core:invoke>
+                  </core:when>
+                  <core:otherwise>
+                    <core:set escapeText="false" value="Using direct XOG with Session ID" var="logMessage"/>
+                    <core:choose>
+                      <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                          <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                          <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                        </core:if>
+                        <gel:log var="logMessageList">${logMessage}</gel:log>
+                      </core:when>
+                      <core:otherwise>
+                        <gel:log>${logMessage}</gel:log>
+                      </core:otherwise>
+                    </core:choose>
+                    <core:invoke method="processDoc" on="${XOGAdminClient}" var="xogresponse">
+                      <core:arg type="org.w3c.dom.Document" value="${xogrequest}"/>
+                      <core:arg type="java.lang.String" value="${thisSessionId}"/>
+                    </core:invoke>
+                  </core:otherwise>
+                </core:choose>
+              </core:when>
+              <core:otherwise>
+                <soap:invoke endpoint="${xogURL}" var="xogresponse">
+                  <soap:message>
+                    <soapenv:Envelope>
+                      <soapenv:Header>
+                        <Auth>
+                          <core:choose>
+                            <core:when test="${empty(thisSessionId)}">
+                              <Username>${xog_user}</Username>
+                              <Password>${xog_password}</Password>
+                            </core:when>
+                            <core:otherwise>
+                              <SessionID>${thisSessionId}</SessionID>
+                            </core:otherwise>
+                          </core:choose>
+                        </Auth>
+                      </soapenv:Header>
+                      <soapenv:Body>
+                        <gel:include select="$xogrequest"/>
+                      </soapenv:Body>
+                    </soapenv:Envelope>
+                  </soap:message>
+                </soap:invoke>
+              </core:otherwise>
+            </core:choose>
+            <core:if test="${verbose_logs}">
+              <gel:set asString="true" select="$xogresponse" var="output"/>
+              <core:set escapeText="false" value="XOG Response:&#xa;${output}" var="logMessage"/>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                  </core:if>
+                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                </core:when>
+                <core:otherwise>
+                  <gel:log>${logMessage}</gel:log>
+                </core:otherwise>
+              </core:choose>
+            </core:if>
+            <!-- Process all errors reported by XOG -->
+            <core:set value="${false}" var="thisError"/>
+            <gel:forEach select="$xogresponse//ErrorInformation" var="xogerrors">
+              <gel:set asString="true" select="$xogerrors/Severity/text()" var="xogseverity"/>
+              <core:if test="${empty(xogseverity)}">
+                <core:set value="WARNING" var="xogseverity"/>
+              </core:if>
+              <gel:set asString="true" select="$xogerrors/Description/text()" var="xogdescription"/>
+              <core:if test="${empty(xogdescription)}">
+                <core:set value="XOG" var="xogdescription"/>
+              </core:if>
+              <gel:set asString="true" select="$xogerrors/Exception/text()" var="xogexceptionFull"/>
+              <core:set value="${null}" var="xogexception"/>
+              <core:if test="${not empty(xogexceptionFull)}">
+                <core:set value="${xogexceptionFull.substring(xogexceptionFull.indexOf(':'),xogexceptionFull.indexOf('at com'))}" var="xogexception"/>
+                <core:if test="${empty(xogexception)}">
+                  <core:set value="${xogexceptionFull.substring(0,xogexceptionFull.indexOf('at'))}" var="xogexception"/>
+                </core:if>
+              </core:if>
+              <core:if test="${(xogseverity eq 'FATAL') or (xogseverity eq 'ERROR')}">
+                <core:if test="${(xogseverity eq 'FATAL') or (break_on_xog_error eq 'YES')}">
+                  <core:set value="${true}" var="thisError"/>
+                </core:if>
+              </core:if>
+              <core:set value="${xogseverity}: ${xogdescription} ${xogexception}" var="logMessage"/>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                  </core:if>
+                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                </core:when>
+                <core:otherwise>
+                  <gel:log level="WARN">${logMessage}</gel:log>
+                </core:otherwise>
+              </core:choose>
+            </gel:forEach>
+            <core:if test="${thisError}">
+              <gel:forEach select="$xogresponse//KeyInformation" var="xogInfo">
+                <gel:forEach select="$xogInfo/column" var="xogColumn">
+                  <gel:set asString="true" select="$xogColumn/@name" var="xogName"/>
+                  <gel:set asString="true" select="$xogColumn/text()" var="xogValue"/>
+                  <core:set value="Key Information: ${xogName} = ${xogValue}" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log level="WARN">${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                </gel:forEach>
+              </gel:forEach>
+            </core:if>
+            <gel:forEach select="$xogresponse//EXCEPTION" var="xogerrors">
+              <core:set value="EXCEPTION" var="xogseverity"/>
+              <gel:set asString="true" select="$xogerrors/@message/text()" var="xogdescription"/>
+              <core:if test="${empty(xogdescription)}">
+                <core:set value="XOG" var="xogdescription"/>
+              </core:if>
+              <core:set value="${true}" var="thisError"/>
+              <core:set value="${xogseverity}: ${xogdescription}" var="logMessage"/>
+              <core:choose>
+                <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                    <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                    <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                  </core:if>
+                  <gel:log var="logMessageList">${logMessage}</gel:log>
+                </core:when>
+                <core:otherwise>
+                  <gel:log level="WARN">${logMessage}</gel:log>
+                </core:otherwise>
+              </core:choose>
+            </gel:forEach>
+            <!-- If we have an error then raise an Exception, otherwise report the XOG status and try to get a Session ID if we need one -->
+            <core:choose>
+              <core:when test="${thisError}">
+                <core:new className="java.lang.Exception" var="err">
+                  <core:arg type="java.lang.String" value="An error occured during XOG call"/>
+                </core:new>
+              </core:when>
+              <core:otherwise>
+                <gel:set asString="true" select="$xogresponse//Status/@state/text()" var="thisXOGStatus"/>
+                <core:if test="${not empty(thisXOGStatus)}">
+                  <core:set value="XOG status: ${thisXOGStatus}" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log>${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                </core:if>
+                <!-- If we don't have a Session ID then grab one from the XOG response -->
+                <core:if test="${empty(thisSessionId)}">
+                  <gel:set asString="true" select="$xogresponse//xog:SessionID/text()" var="thisSessionId"/>
+                  <core:if test="${not empty(thisSessionId)}">
+                    <core:set value="XOG Session ID: ${thisSessionId}" var="logMessage"/>
+                    <core:choose>
+                      <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                          <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                          <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                        </core:if>
+                        <gel:log var="logMessageList">${logMessage}</gel:log>
+                      </core:when>
+                      <core:otherwise>
+                        <gel:log>${logMessage}</gel:log>
+                      </core:otherwise>
+                    </core:choose>
+                  </core:if>
+                </core:if>
+              </core:otherwise>
+            </core:choose>
+          </core:if>
+          <!-- End of XOG call -->
+          <!-- If we logged an error in XOG then exit the loop. The error will get trapped and reported later -->
+          <core:if test="${not empty(err)}">
+            <core:break/>
+          </core:if>
+        </core:while>
+        <!-- If we logged an error in XOG then exit the loop. The error will get trapped and reported later -->
+        <core:if test="${not empty(err)}">
+          <core:break/>
+        </core:if>
+      </core:forEach>
+      <!-- If we logged an error in XOG then exit the loop. The error will get trapped and reported later -->
+      <core:if test="${not empty(err)}">
+        <core:break/>
+      </core:if>
+      <!-- If we get to here then we have no errors so we can process the XOG response -->
+      <!-- START OF SCRIPT PROCESSING LOGIC -->
+      <core:switch on="${processStep}">
+        <core:case value="DUMMY">
+          <!-- Setting GEL variables as appropriate. NOTE that we ALWAYS set 'xogrequest' and then transfer the XOG response to a variable after the XOG call -->
+          <gel:set select="$xogresponse//NikuDataBus/Resources/Resource" var="thisResource"/>
+          <!-- As an example we will just output it -->
+          <gel:set asString="true" select="$thisResource" var="output"/>
+          <core:set escapeText="false" value="This Resource:&#xa;${output}" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log>${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+        </core:case>
+        <core:case value="xog_data_file">
+          <!-- Setting GEL variables as appropriate. NOTE that we ALWAYS set 'xogrequest' and then transfer the XOG response to a variable after the XOG call -->
+          <core:set value="${file.separator}" var="FS"/>
+          <core:switch on="${fileDataSource}">
+            <core:case value="data_file">
+              <core:set value="${dataloadData.code}" var="thisInstanceCode"/>
+              <gel:set
+                select="$xogresponse//NikuDataBus/customObjectInstances/instance[./@instanceCode = $thisInstanceCode]/CustomInformation/ColumnValue[./@name = 'data_file']/Documents" var="thisFile"/>
+              <gel:set asString="true" select="$thisFile/Parent/@documentLocation/text()" var="thisFileLocation"/>
+              <core:forEach items="${document_folders}" var="docFolder">
+                <core:set value="${thisFileLocation}${docFolder}${FS}" var="thisFileLocation"/>
+              </core:forEach>
+              <gel:set asString="true" select="$thisFile/Parent/Document/Version/@id/text()" var="thisDocumentId"/>
+              <core:set value="${thisDocumentId.substring(1,4)}" var="pathOne"/>
+              <core:set value="00${thisDocumentId.substring(0,1)}" var="pathTwo"/>
+              <core:set var="thisFileLocation">${thisFileLocation}${pathOne}${FS}${pathTwo}${FS}${thisDocumentId}</core:set>
+              <gel:set asString="true" select="$thisFile/Parent/Document/@name/text()" var="thisDocumentName"/>
+              <gel:set asString="true" select="$thisFile/Parent/Document/@mimeType/text()" var="thisDocumentType"/>
+              <core:set value="[unknown]" var="thisDocumentExt"/>
+            </core:case>
+            <core:case value="file_location">
+              <core:set value="${dataloadData.file_location}" var="thisFileLocation"/>
+              <core:set value="${thisFileLocation}" var="thisDocumentName"/>
+            </core:case>
+          </core:switch>
+          <core:set value="Data file location: ${thisFileLocation}" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log>${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+          <!-- Grab the file extension so we can change the system mime type association if required -->
+          <core:set value="${thisDocumentName.lastIndexOf('.')}" var="i"/>
+          <core:set value="${i + 1}" var="i"/>
+          <core:new className="java.math.BigDecimal" var="i">
+            <core:arg type="long" value="${i}"/>
+          </core:new>
+          <core:set value="${i.intValueExact()}" var="i"/>
+          <core:if test="${i gt 0}">
+            <core:set value="${thisDocumentName.substring(i)}" var="thisDocumentExt"/>
+          </core:if>
+          <core:switch on="${thisDocumentExt}">
+            <core:case value="csv">
+              <core:set value="text/csv" var="thisDocumentType"/>
+            </core:case>
+          </core:switch>
+          <core:if test="${empty(thisDocumentType)}">
+            <core:set value="${thisDocumentExt}" var="thisDocumentType"/>
+          </core:if>
+          <!-- Check we are processing a supported file type -->
+          <!-- Do nothing (empty case) if we support the file type -->
+          <core:switch on="${thisDocumentType}">
+            <core:case value="application/vnd.ms-excel"/>
+            <core:case value="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>
+            <core:default>
+              <!-- v05 - Assume that the correct file extension means the correct file type - this is a fall-back if Clarity is given an incorrect mime-type -->
+              <core:switch on="${thisDocumentExt}">
+                <core:case value="xls">
+                  <core:set
+                    value="Assuming that file extension of '${thisDocumentExt}' implies the correct file type. Mime type reported is '${thisDocumentType}'" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log>${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                </core:case>
+                <core:case value="xlsx">
+                  <core:set
+                    value="Assuming that file extension of '${thisDocumentExt}' implies the correct file type. Mime type reported is '${thisDocumentType}'" var="logMessage"/>
+                  <core:choose>
+                    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+                      </core:if>
+                      <gel:log var="logMessageList">${logMessage}</gel:log>
+                    </core:when>
+                    <core:otherwise>
+                      <gel:log>${logMessage}</gel:log>
+                    </core:otherwise>
+                  </core:choose>
+                </core:case>
+                <core:default>
+                  <core:new className="java.lang.Exception" var="err">
+                    <core:arg type="java.lang.String" value="The file type for '${thisDocumentName}' (${thisDocumentType}) is not supported"/>
+                  </core:new>
+                  <!-- Remove xogrequest so we don't flood the error reporting -->
+                  <core:remove var="xogrequest"/>
+                  <core:remove var="xogresponse"/>
+                  <core:break/>
+                </core:default>
+              </core:switch>
+            </core:default>
+          </core:switch>
+          <util:available file="${thisFileLocation}">
+            <util:file name="${thisFileLocation}" var="spreadsheetFile"/>
+          </util:available>
+          <core:if test="${empty(spreadsheetFile)}">
+            <core:new className="java.lang.Exception" var="err">
+              <core:arg type="java.lang.String" value="Cannot XOG out data file: ${thisDocumentName}"/>
+            </core:new>
+            <core:break/>
+          </core:if>
+          <!-- Create the appropriate POI instance -->
+          <core:new className="java.io.FileInputStream" var="spreadsheetFileStream">
+            <core:arg type="java.io.File" value="${spreadsheetFile}"/>
+          </core:new>
+          <core:invokeStatic className="org.apache.poi.ss.usermodel.WorkbookFactory" method="create" var="thisWorkbook">
+            <core:arg type="java.io.InputStream" value="${spreadsheetFileStream}"/>
+          </core:invokeStatic>
+        </core:case>
+      </core:switch>
+      <!-- END OF SCRIPT PROCESSING LOGIC -->
+      <core:remove var="xogresponse"/>
+      <core:if test="${show_step_timing}">
+        <core:set value="${stepTime}" var="lastStepTime"/>
+        <core:new className="java.util.GregorianCalendar" var="stepTime"/>
+        <core:set value="Time taken for step '${processStep}': ${(stepTime.getTimeInMillis() - lastStepTime.getTimeInMillis())/1000} seconds" var="logMessage"/>
+        <core:choose>
+          <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+              <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+              <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+            </core:if>
+            <gel:log var="logMessageList">${logMessage}</gel:log>
+          </core:when>
+          <core:otherwise>
+            <gel:log>${logMessage}</gel:log>
+          </core:otherwise>
+        </core:choose>
+      </core:if>
+      <core:if test="${show_step_memory}">
+        <core:if test="${not empty(stepMemory)}">
+          <core:set value="${thisRuntime.totalMemory()}" var="currentMemory"/>
+          <core:set value="${thisRuntime.freeMemory()}" var="currentFreeMemory"/>
+          <core:set
+            value="Memory change for step '${processStep}': ${((currentMemory - currentFreeMemory) - ( stepMemory - stepFreeMemory))/(1024 * 1024)} Mb (${currentMemory/(1024 * 1024)} Mb)" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log>${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+          <core:remove var="stepMemory"/>
+        </core:if>
+      </core:if>
+    </core:forEach>
+    <!-- Exit the main loop -->
+  </core:catch>
+  <!-- If any error is raised (via an Exception) then report it and exit. Note that we report at WARN level to avoid stalling the process -->
+  <core:if test="${not empty(err)}">
+    <core:set value="ERROR: ${err.getMessage()}" var="logMessage"/>
+    <core:choose>
+      <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+          <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+          <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+        </core:if>
+        <gel:log var="logMessageList">${logMessage}</gel:log>
+      </core:when>
+      <core:otherwise>
+        <gel:log level="WARN">${logMessage}</gel:log>
+      </core:otherwise>
+    </core:choose>
+    <core:if test="${not empty(xogrequest)}">
+      <gel:set asString="true" select="$xogrequest" var="output"/>
+      <core:set escapeText="false" value="XOG Request:&#xa;${output}" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log level="WARN">${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+    </core:if>
+    <core:if test="${not empty(xogresponse)}">
+      <gel:set asString="true" select="$xogresponse" var="output"/>
+      <core:set escapeText="false" value="XOG Response:&#xa;${output}" var="logMessage"/>
+      <core:choose>
+        <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+            <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+            <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+          </core:if>
+          <gel:log var="logMessageList">${logMessage}</gel:log>
+        </core:when>
+        <core:otherwise>
+          <gel:log level="WARN">${logMessage}</gel:log>
+        </core:otherwise>
+      </core:choose>
+    </core:if>
+    <!-- Update instance status if we can -->
+    <!-- If dataloadData is not empty then we have (at least) a database connection -->
+    <core:if test="${not empty(dataloadData)}">
+      <core:choose>
+        <!-- If we have rowErrors then it's a validation error -->
+        <core:when test="${rowErrors gt 0}">
+          <core:set value="z_errors" var="errorStatus"/>
+        </core:when>
+        <core:otherwise>
+          <core:set value="z_system_error" var="errorStatus"/>
+        </core:otherwise>
+      </core:choose>
+      <sql:update escapeText="false"
+          var="updatedRows">
+		UPDATE
+		 ${file_loader_table}
+		SET
+		 process_message = ?
+		,process_logs_url = ?
+		,last_updated_date = SYSDATE
+		<core:if
+          test="${always_padlock_record}">
+		,is_read_write = 0
+		</core:if>
+		WHERE
+		 id = ?
+		<sql:param value="${errorStatus}"/>
+        <sql:param escapeText="false" value="/niku/nu#action:z_process_logs_obj&amp;object_code=${file_loader_table_root}&amp;instance_id=${dataloadData.id}&amp;process_code=${process_code}"/>
+        <sql:param value="${dataloadData.id}"/>
+      </sql:update>
+    </core:if>
+    <!-- Send an email if the process failed. Send a URL to the process instance and the reported error -->
+    <core:if test="${(runningInClarity) and (not empty(process_report_group))}">
+      <sql:query
+          var="getUsersData">
+		SELECT
+		 srm.email user_email
+		FROM
+		 srm_resources srm
+		INNER JOIN cmn_sec_user_groups csug  ON (srm.user_id = csug.user_id)
+		INNER JOIN cmn_sec_groups csg ON (csg.id = csug.group_id)
+		WHERE
+		 group_code = ?
+		<sql:param value="${process_report_group}"/>
+      </sql:query>
+      <core:if test="${getUsersData.RowCount gt 0}">
+        <!--core:invokeStatic var="config" className="com.niku.union.config.ConfigurationManager" method="getInstance" />
+			<core:set var="config" value="${config.getProperties()}" /-->
+        <core:set value="${config.getProperties().getMailServer().getDefaultSenderAddress()}" var="senderEmail"/>
+        <core:if test="${empty(senderEmail)}">
+          <core:set value="${error_email_sender}" var="senderEmail"/>
+        </core:if>
+        <core:forEach items="${getUsersData.rows}" var="thisRow">
+          <core:if test="${not runningOutsideProcess}">
+            <gel:email from="${senderEmail}" fromName="${error_email_sender_name}" subject="${error_email_subject}" to="${thisRow.user_email}"><![CDATA[
+<pre>
+${error_email_intro}
+		
+${rootURL}/niku/nu#action:bpm.processInstanceError&process_instance_id=${gel_processInstanceId}&object_type=admin&ui.page.space=bpm.processDefinitions&ui.page.template=union.adminPage&bpm.returnModuleAction=bpm.processInstancesReturn
+	
+${error_email_msg_intro}
+
+${err.getMessage()}
+</pre>
+]]></gel:email>
+          </core:if>
+          <core:set value="Exception Email sent to: ${thisRow.user_email} from: ${senderEmail}" var="logMessage"/>
+          <core:choose>
+            <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+                <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+                <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+              </core:if>
+              <gel:log var="logMessageList">${logMessage}</gel:log>
+            </core:when>
+            <core:otherwise>
+              <gel:log level="WARN">${logMessage}</gel:log>
+            </core:otherwise>
+          </core:choose>
+        </core:forEach>
+      </core:if>
+    </core:if>
+  </core:if>
+  <core:new className="java.util.GregorianCalendar" var="endTime"/>
+  <core:set value="Time taken: ${(endTime.getTimeInMillis() - startTime.getTimeInMillis())/1000} seconds" var="logMessage"/>
+  <core:choose>
+    <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+        <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+        <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+      </core:if>
+      <gel:log var="logMessageList">${logMessage}</gel:log>
+    </core:when>
+    <core:otherwise>
+      <gel:log>${logMessage}</gel:log>
+    </core:otherwise>
+  </core:choose>
+  <!-- Create log file of all processing messages - only done if running outside Clarity -->
+  <core:if test="${runningOutsideProcess}">
+    <core:set value="${scriptName}" var="logFileName"/>
+    <core:if test="${timestamp_log_file_name}">
+      <core:set var="endTime">
+        <gel:formatDate format="yyyyMMddHHmm"/>
+      </core:set>
+      <core:set value="${logFileName}-${endTime}" var="logFileName"/>
+    </core:if>
+    <core:set value="${logFileName}.log" var="logFileName"/>
+    <core:file escapeText="false" name="${logFileName}" omitXmlDeclaration="true">${logMessageList}</core:file>
+    <core:set value="Log file: ${logFileName}" var="logMessage"/>
+    <core:choose>
+      <core:when test="${runningOutsideProcess}">${logMessage}
+<core:if test="${timestamp_log}">
+          <gel:formatDate format="dd MMM yy HH:mm:ss.SSS" stringVar="logDate"/>
+          <core:set value="${logDate} - ${logMessage}" var="logMessage"/>
+        </core:if>
+        <gel:log var="logMessageList">${logMessage}</gel:log>
+      </core:when>
+      <core:otherwise>
+        <gel:log>${logMessage}</gel:log>
+      </core:otherwise>
+    </core:choose>
+  </core:if>
+</gel:script>
